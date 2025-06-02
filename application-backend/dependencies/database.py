@@ -10,7 +10,7 @@ client = None
 # Helper method to get mongo client
 def get_mongo_client():
     global client
-    if client is not None:
+    if client is None:
         if not MONGODB_URI:
             print("MONGODB URI NOT FOUND")
         client = pymongo.MongoClient(MONGODB_URI)
