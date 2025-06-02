@@ -1,0 +1,25 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Mongo vars
+MONGODB_URI = os.getenv("MONGODB_URI")
+DATABASE_NAME = "job-application-bot-db"
+USER_COLLECTION = "user-data-collection"
+JOB_DATA_COLLECTION = "job-data-collection"
+TEST_COLLECTION = "test-collection"
+
+# Jsearch API
+JSEARCH_API_KEY = os.getenv("JSEARCH_API_KEY")
+JSEARCH_API_HOST = os.getenv("JSEARCH_API_HOST")
+
+# Embedding model
+EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
+
+if not MONGODB_URI:
+    print("MONGODB_URI NOT FOUND")
+if not JSEARCH_API_HOST:
+    print("JSEARCH API HOST NOT FOUND")
+if not JSEARCH_API_KEY:
+    print("JSEARCH API KEY NOT FOUND")
