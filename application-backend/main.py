@@ -1,150 +1,28 @@
 from fastapi import FastAPI, Depends
-from typing import Optional, Annotated # These are used for type hinting
-from datetime import datetime # Used for timestamp 
-import pymongo
-from pymongo.errors import DuplicateKeyError
-import os
-from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-import requests
-import time
+from contextlib import asynccontextmanager
+from routers import job, user
+from core.config import MONGODB_URI, JSEARCH_API_KEY
+from dependencies.database import get_mongo_client, close_mongo_connection
 
-app = FastAPI()
+app = FastAPI(
+    title="Job Applications Bot API",
+    description="Backend for automated job applications with AI",
+    version="0.1.0",
+)
 
-# loads the .env file
-load_dotenv()
-
-# Mongo vars
-MONGODB_URI = os.getenv("MONGODB_URI")
-DATABASE_NAME = "job-application-bot-db"
-USER_COLLECTION = "user-data-collection"
-JOB_DATA_COLLECTION = "job-data-collection"
-TEST_COLLECTION = "test-collection"
-
-# Jsearch API
-JSEARCH_API_KEY = os.getenv("JSEARCH_API_KEY")
-JSEARCH_API_HOST = os.getenv("JSEARCH_API_HOST")
-
-# Embedding model
-EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
-embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-
-# Helper method to create a mongo db instance
-def get_database():
-    client = pymongo.MongoClient(MONGODB_URI)
-    db = client[DATABASE_NAME]
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     try:
-        yield db
-    finally:
-        client.close()
+        get_mongo_client()
+        print("MongoDB client initialized successfully.")
+    except Exception as e:
+        print("Error, failed to initialize MongoDB client: {e}")
+    yield
+    close_mongo_connection()
 
-DatabaseDependency = Annotated[pymongo.database.Database, Depends(get_database)]
+app.include_router(job.router)
+app.include_router(user.router)
 
 @app.get("/")
-def test(db: DatabaseDependency, question: Optional[str]):
-    try:
-        if question:
-            message = "Message sent to db and received"
-            db[TEST_COLLECTION].insert_one({"message": message})
-        return {"message": message}
-    except Exception as e:
-        return {"error": f"Something went wrong {str(e)}"}
-
-
-# Pass in txt of resume and other relevant information and embed it
-@app.post("/embed-text/")
-def embed_resume_text(data: dict, db: DatabaseDependency):
-    text_input = data.get("text")
-    try:
-        if text_input:
-            embedding_vector = embedding_model.encode(text_input).tolist()
-            db[USER_COLLECTION].insert_one({
-                "embedding": embedding_vector,
-                "text": text_input,
-                "timestamp": datetime.now()
-            })
-        return {"data": data.get("text")}
-    except Exception as e:
-        return {"error": f"Something went wrong {str(e)}"}
-    
-# Pass in params for job search and write all info returned by jsearch api to job-data-collection
-@app.post("/find-jobs/")
-def find_jobs(params: dict, db: DatabaseDependency):
-    print("entered function")
-    what = params.get("what", "")
-    where = params.get("where", "")
-    print(f"what: {str(what)}")
-    print(f"where: {str(where)}")
-    jsearch_api_url = "https://jsearch.p.rapidapi.com/search"
-    search_params = {
-        "query": what,
-        "page": 1,
-        "num_pages": 20,
-        "country": where,
-        "date_posted": "all"
-    }
-
-    headers = {
-        "x-rapidapi-key": str(JSEARCH_API_KEY),
-        "x-rapidapi-host": str(JSEARCH_API_HOST)
-    }
-
-    try:
-        response = requests.get(jsearch_api_url, headers=headers, params=search_params)
-        response.raise_for_status()
-        job_data = response.json()
-        jobs_fetched = job_data.get("data", [])
-        print(f"NUM JOBS FETCHED: {len(jobs_fetched)}")
-        print(f"REQUESTS REMAINING: {int(response.headers.get("x-ratelimit-requests-remaining", 0))}")
-
-        # Store the job data in the mongodb
-        inserted_count = 0
-        for job in jobs_fetched:
-
-            # Do later: add in logic to check for duplicate jobs
-
-            # Create embedding of job description
-            job_description = job.get(job.get("job_description"))
-            job_description_embedding = embedding_model.encode(str(job_description)).tolist()
-            
-            job_to_save = {
-                "_id": job.get("job_id"),
-                "title": job.get("job_title"),
-                "company_name": job.get("employer_name"),
-                "location_name": job.get("job_city"),
-                "country": job.get("job_country"),
-                "state": job.get("job_state"),
-                "description": job.get("job_description"),
-                "embedding": job_description_embedding,
-                "url": job.get("job_apply_link"),
-                "employment_type": job.get("job_employment_type"),
-                "posted_at": datetime.fromtimestamp(job.get("job_posted_at_timestamp")) if job.get("job_posted_at_timestamp") else None,
-                "source": "JSearch (RapidAPI)",
-                "raw_jsearch_data": job
-            }
-            try:
-                db[JOB_DATA_COLLECTION].insert_one(job_to_save)
-                inserted_count += 1
-            except DuplicateKeyError:
-                print(f"Duplicate job id, skipping")
-        return {
-            "message": f"Successfully fetched {len(jobs_fetched)} jobs from JSearch. Inserted {inserted_count} new jobs.",
-            "jsearch_api_response_status": response.status_code
-        }
-
-
-    except requests.exceptions.HTTPError as errh:
-        print(f"JSearch API HTTP Error: {errh}")
-        return {"error": f"JSearch API HTTP Error: {errh}", "status_code": errh.response.status_code}
-    except requests.exceptions.ConnectionError as errc:
-        print(f"JSearch API Connection Error: {errc}")
-        return {"error": f"JSearch API Connection Error: {errc}"}
-    except requests.exceptions.Timeout as errt:
-        print(f"JSearch API Timeout Error: {errt}")
-        return {"error": f"JSearch API Timeout Error: {errt}"}
-    except requests.exceptions.RequestException as err:
-        print(f"JSearch API Request Error: {err}")
-        return {"error": f"JSearch API Request Error: {err}"}
-    except Exception as e:
-        print(f"General error fetching jobs: {e}")
-        return {"error": f"Could not fetch jobs: {str(e)}"}
+def read_root():
+    return {"message": "Welcome to the Job Applications Bot API! Check /docs for endpoints."}
