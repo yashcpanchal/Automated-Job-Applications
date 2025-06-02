@@ -7,7 +7,7 @@ from pymongo.errors import DuplicateKeyError
 from datetime import datetime
 
 router = APIRouter (
-    prefix="job-search",
+    prefix="/job-search",
     tags=["Find jobs similar to prompt/resume"]
 )
 
@@ -45,9 +45,6 @@ def find_jobs(params: dict, db: DatabaseDependency,
         # Store the job data in the mongodb
         inserted_count = 0
         for job in jobs_fetched:
-
-            # Do later: add in logic to check for duplicate jobs
-
             # Create embedding of job description
             job_description = job.get(job.get("job_description"))
             job_description_embedding = embedding_model.encode(str(job_description)).tolist()
@@ -93,3 +90,8 @@ def find_jobs(params: dict, db: DatabaseDependency,
     except Exception as e:
         print(f"General error fetching jobs: {e}")
         return {"error": f"Could not fetch jobs: {str(e)}"}
+    
+
+@router.get("/match")
+def match_jobs(db: DatabaseDependency):
+    return
