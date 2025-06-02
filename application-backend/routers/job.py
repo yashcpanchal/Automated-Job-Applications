@@ -11,8 +11,8 @@ router = APIRouter (
     tags=["Find jobs similar to prompt/resume"]
 )
 
-
-@router.post("/find-jobs/")
+# Pass in params for job search and write all info returned by jsearch api to job-data-collection
+@router.post("/fetch-jobs/")
 def find_jobs(params: dict, db: DatabaseDependency,
               embedding_model: ModelDependency):
     print("entered function")
