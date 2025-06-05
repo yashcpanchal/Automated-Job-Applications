@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from core.config import JSEARCH_API_HOST, JSEARCH_API_KEY, JOB_DATA_COLLECTION
+from core.config import JSEARCH_API_HOST, JSEARCH_API_KEY, JOB_DATA_COLLECTION, USER_COLLECTION
 from dependencies.database import DatabaseDependency
 from dependencies.embedding_model import ModelDependency
 import requests
@@ -21,6 +21,7 @@ def find_jobs(params: dict, db: DatabaseDependency,
     print(f"what: {str(what)}")
     print(f"where: {str(where)}")
     jsearch_api_url = "https://jsearch.p.rapidapi.com/search"
+    
     search_params = {
         "query": what,
         "page": 1,
@@ -92,6 +93,42 @@ def find_jobs(params: dict, db: DatabaseDependency,
         return {"error": f"Could not fetch jobs: {str(e)}"}
     
 
-@router.get("/match")
-def match_jobs(db: DatabaseDependency):
-    return
+@router.post("/match")
+def match_jobs(db: DatabaseDependency, user_data: dict):
+    try:
+        username = user_data.get("username")
+        query = db[USER_COLLECTION].find_one({"username": username})
+        query_vector = query["embedding"]
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "vector_search_index",
+                    "path": "embedding",
+                    "queryVector": query_vector,
+                    "numCandidates": 5,
+                    "limit": 5
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "title": 1,
+                    "company_name": 1,
+                    "location_name": 1,
+                    "url": 1,
+                    "description": 1,
+                    "employment_type": 1,
+                    "score": {
+                        "meta": "vectorSearchScore"
+                    }
+                }
+            }
+        ]
+
+        results = list(db[JOB_DATA_COLLECTION].aggregate(pipeline))
+        if not results:
+            return {"message": "No similar jobs found"}
+        
+        return {"search_results": results}
+    except Exception as e:
+        print(f"Error during job vector search: {e}")
