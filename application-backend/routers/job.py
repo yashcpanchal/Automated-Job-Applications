@@ -92,7 +92,7 @@ def find_jobs(params: dict, db: DatabaseDependency,
         print(f"General error fetching jobs: {e}")
         return {"error": f"Could not fetch jobs: {str(e)}"}
     
-
+# pass in username, searches mongodb for matching username and then outputs jobs with a semantically similar description to resume txt of user
 @router.post("/match")
 def match_jobs(db: DatabaseDependency, user_data: dict):
     try:
@@ -105,8 +105,8 @@ def match_jobs(db: DatabaseDependency, user_data: dict):
                     "index": "vector_search_index",
                     "path": "embedding",
                     "queryVector": query_vector,
-                    "numCandidates": 5,
-                    "limit": 5
+                    "numCandidates": 50,
+                    "limit": 3
                 }
             },
             {
@@ -119,7 +119,7 @@ def match_jobs(db: DatabaseDependency, user_data: dict):
                     "description": 1,
                     "employment_type": 1,
                     "score": {
-                        "meta": "vectorSearchScore"
+                        "$meta": "vectorSearchScore"
                     }
                 }
             }
@@ -128,7 +128,6 @@ def match_jobs(db: DatabaseDependency, user_data: dict):
         results = list(db[JOB_DATA_COLLECTION].aggregate(pipeline))
         if not results:
             return {"message": "No similar jobs found"}
-        
         return {"search_results": results}
     except Exception as e:
         print(f"Error during job vector search: {e}")
