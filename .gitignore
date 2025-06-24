@@ -172,3 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# For now hide the test.png file
+.png
+
+# Hide the testing folder
+testing/
