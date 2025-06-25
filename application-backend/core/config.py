@@ -17,9 +17,14 @@ JSEARCH_API_HOST = os.getenv("JSEARCH_API_HOST")
 # Embedding model
 EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
 
+# Gemini API key
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
 if not MONGODB_URI:
     print("MONGODB_URI NOT FOUND")
 if not JSEARCH_API_HOST:
     print("JSEARCH API HOST NOT FOUND")
 if not JSEARCH_API_KEY:
     print("JSEARCH API KEY NOT FOUND")
+if not GOOGLE_API_KEY:
+    print("GOOGLE API KEY NOT FOUND")
