@@ -11,8 +11,14 @@ router = APIRouter (
     tags=["Find jobs similar to prompt/resume"]
 )
 
+# Add in a pydantic model for 
+@router.post("/fetch-jobs-agent")
+def fetch_jobs_agent(params: dict, db: DatabaseDependency, embedding_model: ModelDependency):
+    return
+
+
 # Pass in params for job search and write all info returned by jsearch api to job-data-collection
-@router.post("/fetch-jobs/")
+@router.post("/fetch-jobs-jsearch/")
 def find_jobs(params: dict, db: DatabaseDependency,
               embedding_model: ModelDependency):
     print("entered function")
