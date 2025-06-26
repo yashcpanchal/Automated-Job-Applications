@@ -20,6 +20,9 @@ EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
 # Gemini API key
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# Brave SERP API
+BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY")
+
 if not MONGODB_URI:
     print("MONGODB_URI NOT FOUND")
 if not JSEARCH_API_HOST:
