@@ -1,14 +1,20 @@
 import os
 from typing import List, TypedDict, Annotated
+import asyncio
+
+from pydantic import BaseModel, Field
 
 # Langchain and Langgraph imports
-from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
+from langchain_community.tools import BraveSearch
 
 # Models imports
 from models.job import Job
 
+# API key imports
+from core.config import GOOGLE_API_KEY, BRAVE_SEARCH_API_KEY
 
 class AgentState(TypedDict):
     """
@@ -29,6 +35,12 @@ class AgentState(TypedDict):
     extracted_jobs: List[Job]
     final_jobs: List[Job]
 
+class SearchQueries(BaseModel):
+    """List of search queries to use."""
+    queries: List[str] = Field(
+        ...,
+        description="""A list of 3-5 diverse, expert-level search engine queries to find job postings."""
+    )
 
 async def craft_query_node(state: AgentState):
     """
@@ -39,19 +51,53 @@ async def craft_query_node(state: AgentState):
 
     # Generate the search query here
 
-    mock_queries = [
-        f"remote senior python developer jobs",
-        f"backend engineer position REST API United States",
-        f"fastapi developer job openings 2024"
-    ]
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
+    # Ensuring that the llm sticks to the desired output schema
+    structured_llm = llm.with_structured_output(SearchQueries)
 
-    return {"search_queries": mock_queries}
+    # Define the prompt template
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a world-class career assistant and expert at crafting search engine queries.
+        Your goal is to help a user find relevant job postings based on their resume and a specific prompt.
+        
+        Generate a diverse list of 3 to 5 search queries that are likely to yield direct job application links
+        on company career pages. The queries should be
+        creative and varied to cover different angles of the job search."""),
+        ("user", """Here is my resume:
+        <resume>
+        {resume_text}
+        </resume>
+        \n\n
+        Here is my current search prompt:
+        <prompt>
+        {search_prompt}
+        </prompt>
+        \n\n
+        Please generate the search queries.""")
+    ])
+
+    chain = prompt | structured_llm
+
+    result_model = await chain.ainvoke({
+        "resume_text": state['resume_text'],
+        "search_prompt": state['search_prompt']
+    })
+
+    # queries is defined by the output schema in the SearchQueries class
+    print(f"GENERATED QUERIES: {result_model.queries}")
+    return {"search_queries": result_model.queries}
 
 async def retrieve_and_parse_node(state: AgentState):
     """
     Node 2: Uses a search tool to find job URLs and then parses each URL to extract job data.
     """
     queries = state['search_queries']
+    search_tool = BraveSearch.from_api_key(api_key=BRAVE_SEARCH_API_KEY, search_kwargs={"count": 5})
+    all_urls = set() # ensures no duplicates
+    search_tasks = [search_tool.ainvoke(query) for query in queries]
+    results_list = await asyncio.gather(*search_tasks)
+
+    for results in results_list
 
     # Fake urls for now
 
