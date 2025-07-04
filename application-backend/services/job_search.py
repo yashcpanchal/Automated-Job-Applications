@@ -1,6 +1,8 @@
 import os
-from typing import List, TypedDict, Annotated
+from typing import List, TypedDict, Annotated, Optional
 import asyncio
+import httpx
+from bs4 import BeautifulSoup
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +43,11 @@ class SearchQueries(BaseModel):
         ...,
         description="""A list of 3-5 diverse, expert-level search engine queries to find job postings."""
     )
+
+async def _fetch_and_extract_job_data(url: str, llm_chain) -> Optional[Job]:
+    """
+    Fetches content from a URL, cleans it, and uses an LLM to actually extract the job data. 
+    """
 
 async def craft_query_node(state: AgentState):
     """
@@ -92,39 +99,43 @@ async def retrieve_and_parse_node(state: AgentState):
     Node 2: Uses a search tool to find job URLs and then parses each URL to extract job data.
     """
     queries = state['search_queries']
-    search_tool = BraveSearch.from_api_key(api_key=BRAVE_SEARCH_API_KEY, search_kwargs={"count": 5})
+    search_tool = BraveSearch.from_api_key(api_key=BRAVE_SEARCH_API_KEY, search_kwargs={"count": 20, "offset": 0}) # other params: freshness, result_filter 
     all_urls = set() # ensures no duplicates
+
+    # Each entry in search_tasks is a call to brave search api with query
+    # ainvoke creates an awaitable object which needs to be ran with asyncio
     search_tasks = [search_tool.ainvoke(query) for query in queries]
-    results_list = await asyncio.gather(*search_tasks)
+    results_list = await asyncio.gather(*search_tasks) # creates a list of returned values from search api
 
-    for results in results_list
+    for results in results_list:
+        for result in results:
+            all_urls.add(result['link'])
 
-    # Fake urls for now
+    found_urls = list(all_urls)
+    print(f"INFO: Found {len(found_urls)} unique URLs.")
+    print(found_urls)
 
-    mock_urls = [
-        "https://www.linkedin.com/jobs/view/fake-python-job-1",
-        "https://www.indeed.com/viewjob/fake-backend-job-2",
-        "https://wellfound.com/l/fake-startup-job-3"
-    ]
+    # Another agent to parse through the search results retrieved by the search api and format them properly
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
+    structured_llm = llm.with_structured_output(Job, include_raw=False)
 
-    extracted_jobs = []
+    extraction_prompt = ChatGoogleGenerativeAI([
+        ("system", f"""You are an expert data extraction agent. Your task is to extract job posting information
+        from the provided text content of a web page.
+        
+        You must extract the information into the following JSON schema:
+        {Job.model_json_schema()}
+        
+        Pay close attention to finding the direct application URL. If a field is not present, use null.
+        Do not invent any information."""),
+        ("user", "Page Text:\n\n{page_text}")
+    ])
 
-    for url in mock_urls:
-        print(f"  -> Parsing {url}")
-        # llm_extraction_prompt = f"Extract the job details from this page text... into this JSON schema: {Job.model_json_schema()}"
-        # page_content = fetch_page(url)
-        # extracted_data = llm.invoke(llm_extraction_prompt)
-        mock_job = Job(
-            title=f"Mock Job from {url.split('.')[1]}",
-            company=f"Mock Company Inc.",
-            location="Remote",
-            description=f"This is a mock description for a job found at {url}.",
-            application_url=url,
-            source_url=url
-        )
-        extracted_jobs.append(mock_job)
+    extraction_chain = extraction_prompt | structured_llm
 
-    return {"retrieved_urls": mock_urls, "extracted_jobs": extracted_jobs}
+
+    return extracted_jobs
+
 
 async def process_and_match_node(state: AgentState):
     """
