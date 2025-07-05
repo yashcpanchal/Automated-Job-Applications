@@ -3,6 +3,7 @@ from typing import List, TypedDict, Annotated, Optional
 import asyncio
 import httpx
 from bs4 import BeautifulSoup
+import json
 
 from pydantic import BaseModel, Field
 
@@ -46,8 +47,34 @@ class SearchQueries(BaseModel):
 
 async def _fetch_and_extract_job_data(url: str, llm_chain) -> Optional[Job]:
     """
-    Fetches content from a URL, cleans it, and uses an LLM to actually extract the job data. 
+    Fetches content from a URL, cleans it, and uses an LLM to actually extract the job data.
+    Fetching and cleaning is done through bs4, the rest is done thru the llm chain. LLM chain will append
+    all of the relevant data into the job model when it is invoked with the page_text passed in.
     """
+    print(f"Analyzing URL: {url}")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(url, follow_redirects=True)
+            response.raise_for_status() # Will raise an http error for bad status codes
+        soup = BeautifulSoup(response.text, "html.parser")
+        page_text = soup.get_text(separator=' ', strip=True)[:60000]
+        if not page_text:
+            print("Skipping {url}: No text content found")
+            return None
+        
+        # Feeds into llm chain
+        extracted_data = await llm_chain.ainvoke({"page_text": page_text})
+
+        if extracted_data:
+            extracted_data.source_url = url
+            print(f"Extracted {extracted_data.title} from URL")
+            return extracted_data
+    
+    except httpx.RequestError as e:
+        print(f"Skipping {url}: Network error - {e}")
+    except Exception as e:
+        print(f"Skipping {url}: Error during processing - {e}")
+    return None
 
 async def craft_query_node(state: AgentState):
     """
@@ -58,7 +85,7 @@ async def craft_query_node(state: AgentState):
 
     # Generate the search query here
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY, temperature=0.2)
     # Ensuring that the llm sticks to the desired output schema
     structured_llm = llm.with_structured_output(SearchQueries)
 
@@ -92,6 +119,7 @@ async def craft_query_node(state: AgentState):
 
     # queries is defined by the output schema in the SearchQueries class
     print(f"GENERATED QUERIES: {result_model.queries}")
+    breakpoint()
     return {"search_queries": result_model.queries}
 
 async def retrieve_and_parse_node(state: AgentState):
@@ -130,20 +158,24 @@ async def retrieve_and_parse_node(state: AgentState):
         Do not invent any information."""),
         ("user", "Page Text:\n\n{page_text}")
     ])
-
+    # Creating the llm chain using lcel
     extraction_chain = extraction_prompt | structured_llm
+    # Creating a list of awaitable objects (bc function is async).
+    extraction_tasks = [_fetch_and_extract_job_data(url, extraction_chain) for url in found_urls]
+    # Runs the awaitable objects in extraction_tasks using asyncio
+    extracted_job_results = await asyncio.gather(*extraction_tasks)
+    # Filters out emptyy jobs in extracted_job_results
+    extracted_jobs = [job for job in extracted_job_results if job is not None]
 
+    print(f"Successfully retrieved {len(extracted_jobs)} jobs.")
 
-    return extracted_jobs
-
+    return {"retrieved_urls": found_urls, "extracted_jobs": extracted_jobs}
 
 async def process_and_match_node(state: AgentState):
     """
     Node 3: Filters the extracted jobs for relevance against the user's resume.
     """
     print("--- NODE: PROCESSING AND MATCHING JOBS ---")
-    extracted_jobs = state['extracted_jobs']
-    resume_text = state['resume_text']
     
     # TODO: Implement the final filtering logic.
     # This is where we could use semantic search (vector similarity) to compare
@@ -151,9 +183,7 @@ async def process_and_match_node(state: AgentState):
     print("INFO: Filtering jobs for relevance (mock implementation)...")
     
     # For now, we'll just assume all extracted jobs are relevant.
-    final_jobs = extracted_jobs
-    
-    return {"final_jobs": final_jobs}
+    return {"final_jobs": state['extracted_jobs']}
 
 
 class JobSearchService:
@@ -178,9 +208,15 @@ class JobSearchService:
         """
         The main method to run the job search agent.
         """
-        print("\n🚀 --- STARTING AGENTIC JOB SEARCH --- 🚀")
+        print(" --- STARTING AGENTIC JOB SEARCH --- ")
         inputs = {"resume_text": resume_text, "search_prompt": search_prompt}
         final_state = await self.app.ainvoke(inputs)
-        print("✅ --- AGENTIC JOB SEARCH COMPLETE --- ✅\n")
-        
+        print(" --- AGENTIC JOB SEARCH COMPLETE --- \n")
+        final_jobs = final_state.get('final_jobs', [])
+        if final_jobs:
+            final_jobs_as_dicts = [job.model_dump() for job in final_jobs]
+            print(F"FINAL RESULTS:\n {json.dumps(final_jobs_as_dicts, indent=2)}")
+        else:
+            print("No jobs were found or extracted successfully unfortunately :(")
+
         return final_state.get('final_jobs', [])
