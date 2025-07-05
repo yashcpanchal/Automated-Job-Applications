@@ -1,6 +1,9 @@
 import os
-from typing import List, TypedDict, Annotated
+from typing import List, TypedDict, Annotated, Optional
 import asyncio
+import httpx
+from bs4 import BeautifulSoup
+import json
 
 from pydantic import BaseModel, Field
 
@@ -42,6 +45,37 @@ class SearchQueries(BaseModel):
         description="""A list of 3-5 diverse, expert-level search engine queries to find job postings."""
     )
 
+async def _fetch_and_extract_job_data(url: str, llm_chain) -> Optional[Job]:
+    """
+    Fetches content from a URL, cleans it, and uses an LLM to actually extract the job data.
+    Fetching and cleaning is done through bs4, the rest is done thru the llm chain. LLM chain will append
+    all of the relevant data into the job model when it is invoked with the page_text passed in.
+    """
+    print(f"Analyzing URL: {url}")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(url, follow_redirects=True)
+            response.raise_for_status() # Will raise an http error for bad status codes
+        soup = BeautifulSoup(response.text, "html.parser")
+        page_text = soup.get_text(separator=' ', strip=True)[:60000]
+        if not page_text:
+            print("Skipping {url}: No text content found")
+            return None
+        
+        # Feeds into llm chain
+        extracted_data = await llm_chain.ainvoke({"page_text": page_text})
+
+        if extracted_data:
+            extracted_data.source_url = url
+            print(f"Extracted {extracted_data.title} from URL")
+            return extracted_data
+    
+    except httpx.RequestError as e:
+        print(f"Skipping {url}: Network error - {e}")
+    except Exception as e:
+        print(f"Skipping {url}: Error during processing - {e}")
+    return None
+
 async def craft_query_node(state: AgentState):
     """
     Node 1: Crafts targeted search queries based on the user's resume and prompt.
@@ -51,7 +85,7 @@ async def craft_query_node(state: AgentState):
 
     # Generate the search query here
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY, temperature=0.2)
     # Ensuring that the llm sticks to the desired output schema
     structured_llm = llm.with_structured_output(SearchQueries)
 
@@ -85,6 +119,7 @@ async def craft_query_node(state: AgentState):
 
     # queries is defined by the output schema in the SearchQueries class
     print(f"GENERATED QUERIES: {result_model.queries}")
+    breakpoint()
     return {"search_queries": result_model.queries}
 
 async def retrieve_and_parse_node(state: AgentState):
@@ -92,47 +127,55 @@ async def retrieve_and_parse_node(state: AgentState):
     Node 2: Uses a search tool to find job URLs and then parses each URL to extract job data.
     """
     queries = state['search_queries']
-    search_tool = BraveSearch.from_api_key(api_key=BRAVE_SEARCH_API_KEY, search_kwargs={"count": 5})
+    search_tool = BraveSearch.from_api_key(api_key=BRAVE_SEARCH_API_KEY, search_kwargs={"count": 20, "offset": 0}) # other params: freshness, result_filter 
     all_urls = set() # ensures no duplicates
+
+    # Each entry in search_tasks is a call to brave search api with query
+    # ainvoke creates an awaitable object which needs to be ran with asyncio
     search_tasks = [search_tool.ainvoke(query) for query in queries]
-    results_list = await asyncio.gather(*search_tasks)
+    results_list = await asyncio.gather(*search_tasks) # creates a list of returned values from search api
 
-    for results in results_list
+    for results in results_list:
+        for result in results:
+            all_urls.add(result['link'])
 
-    # Fake urls for now
+    found_urls = list(all_urls)
+    print(f"INFO: Found {len(found_urls)} unique URLs.")
+    print(found_urls)
 
-    mock_urls = [
-        "https://www.linkedin.com/jobs/view/fake-python-job-1",
-        "https://www.indeed.com/viewjob/fake-backend-job-2",
-        "https://wellfound.com/l/fake-startup-job-3"
-    ]
+    # Another agent to parse through the search results retrieved by the search api and format them properly
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
+    structured_llm = llm.with_structured_output(Job, include_raw=False)
 
-    extracted_jobs = []
+    extraction_prompt = ChatGoogleGenerativeAI([
+        ("system", f"""You are an expert data extraction agent. Your task is to extract job posting information
+        from the provided text content of a web page.
+        
+        You must extract the information into the following JSON schema:
+        {Job.model_json_schema()}
+        
+        Pay close attention to finding the direct application URL. If a field is not present, use null.
+        Do not invent any information."""),
+        ("user", "Page Text:\n\n{page_text}")
+    ])
+    # Creating the llm chain using lcel
+    extraction_chain = extraction_prompt | structured_llm
+    # Creating a list of awaitable objects (bc function is async).
+    extraction_tasks = [_fetch_and_extract_job_data(url, extraction_chain) for url in found_urls]
+    # Runs the awaitable objects in extraction_tasks using asyncio
+    extracted_job_results = await asyncio.gather(*extraction_tasks)
+    # Filters out emptyy jobs in extracted_job_results
+    extracted_jobs = [job for job in extracted_job_results if job is not None]
 
-    for url in mock_urls:
-        print(f"  -> Parsing {url}")
-        # llm_extraction_prompt = f"Extract the job details from this page text... into this JSON schema: {Job.model_json_schema()}"
-        # page_content = fetch_page(url)
-        # extracted_data = llm.invoke(llm_extraction_prompt)
-        mock_job = Job(
-            title=f"Mock Job from {url.split('.')[1]}",
-            company=f"Mock Company Inc.",
-            location="Remote",
-            description=f"This is a mock description for a job found at {url}.",
-            application_url=url,
-            source_url=url
-        )
-        extracted_jobs.append(mock_job)
+    print(f"Successfully retrieved {len(extracted_jobs)} jobs.")
 
-    return {"retrieved_urls": mock_urls, "extracted_jobs": extracted_jobs}
+    return {"retrieved_urls": found_urls, "extracted_jobs": extracted_jobs}
 
 async def process_and_match_node(state: AgentState):
     """
     Node 3: Filters the extracted jobs for relevance against the user's resume.
     """
     print("--- NODE: PROCESSING AND MATCHING JOBS ---")
-    extracted_jobs = state['extracted_jobs']
-    resume_text = state['resume_text']
     
     # TODO: Implement the final filtering logic.
     # This is where we could use semantic search (vector similarity) to compare
@@ -140,9 +183,7 @@ async def process_and_match_node(state: AgentState):
     print("INFO: Filtering jobs for relevance (mock implementation)...")
     
     # For now, we'll just assume all extracted jobs are relevant.
-    final_jobs = extracted_jobs
-    
-    return {"final_jobs": final_jobs}
+    return {"final_jobs": state['extracted_jobs']}
 
 
 class JobSearchService:
@@ -167,9 +208,15 @@ class JobSearchService:
         """
         The main method to run the job search agent.
         """
-        print("\n🚀 --- STARTING AGENTIC JOB SEARCH --- 🚀")
+        print(" --- STARTING AGENTIC JOB SEARCH --- ")
         inputs = {"resume_text": resume_text, "search_prompt": search_prompt}
         final_state = await self.app.ainvoke(inputs)
-        print("✅ --- AGENTIC JOB SEARCH COMPLETE --- ✅\n")
-        
+        print(" --- AGENTIC JOB SEARCH COMPLETE --- \n")
+        final_jobs = final_state.get('final_jobs', [])
+        if final_jobs:
+            final_jobs_as_dicts = [job.model_dump() for job in final_jobs]
+            print(F"FINAL RESULTS:\n {json.dumps(final_jobs_as_dicts, indent=2)}")
+        else:
+            print("No jobs were found or extracted successfully unfortunately :(")
+
         return final_state.get('final_jobs', [])
