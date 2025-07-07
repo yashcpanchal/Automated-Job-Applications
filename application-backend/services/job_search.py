@@ -45,36 +45,38 @@ class SearchQueries(BaseModel):
         description="""A list of 3-5 diverse, expert-level search engine queries to find job postings."""
     )
 
-async def _fetch_and_extract_job_data(url: str, llm_chain) -> Optional[Job]:
+async def _fetch_and_extract_job_data(url: str, llm_chain, semaphore: asyncio.Semaphore) -> Optional[Job]:
     """
     Fetches content from a URL, cleans it, and uses an LLM to actually extract the job data.
     Fetching and cleaning is done through bs4, the rest is done thru the llm chain. LLM chain will append
     all of the relevant data into the job model when it is invoked with the page_text passed in.
     """
-    print(f"Analyzing URL: {url}")
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(url, follow_redirects=True)
-            response.raise_for_status() # Will raise an http error for bad status codes
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_text = soup.get_text(separator=' ', strip=True)[:60000]
-        if not page_text:
-            print("Skipping {url}: No text content found")
-            return None
-        
-        # Feeds into llm chain
-        extracted_data = await llm_chain.ainvoke({"page_text": page_text})
+    # Will only enter the function if the semaphore allwos it
+    async with semaphore:
+        print(f"Analyzing URL: {url}")
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url, follow_redirects=True)
+                response.raise_for_status() # Will raise an http error for bad status codes
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_text = soup.get_text(separator=' ', strip=True)[:60000]
+            if not page_text:
+                print("Skipping {url}: No text content found")
+                return None
+            
+            # Feeds into llm chain
+            extracted_data = await llm_chain.ainvoke({"page_text": page_text})
 
-        if extracted_data:
-            extracted_data.source_url = url
-            print(f"Extracted {extracted_data.title} from URL")
-            return extracted_data
-    
-    except httpx.RequestError as e:
-        print(f"Skipping {url}: Network error - {e}")
-    except Exception as e:
-        print(f"Skipping {url}: Error during processing - {e}")
-    return None
+            if extracted_data:
+                extracted_data.source_url = url
+                print(f"Extracted {extracted_data.title} from URL")
+                return extracted_data
+        
+        except httpx.RequestError as e:
+            print(f"Skipping {url}: Network error - {e}")
+        except Exception as e:
+            print(f"Skipping {url}: Error during processing - {e}")
+        return None
 
 async def craft_query_node(state: AgentState):
     """
@@ -119,7 +121,7 @@ async def craft_query_node(state: AgentState):
 
     # queries is defined by the output schema in the SearchQueries class
     print(f"GENERATED QUERIES: {result_model.queries}")
-    breakpoint()
+    # breakpoint()
     return {"search_queries": result_model.queries}
 
 async def retrieve_and_parse_node(state: AgentState):
@@ -127,17 +129,25 @@ async def retrieve_and_parse_node(state: AgentState):
     Node 2: Uses a search tool to find job URLs and then parses each URL to extract job data.
     """
     queries = state['search_queries']
-    search_tool = BraveSearch.from_api_key(api_key=BRAVE_SEARCH_API_KEY, search_kwargs={"count": 20, "offset": 0}) # other params: freshness, result_filter 
+    search_tool = BraveSearch(api_key=BRAVE_SEARCH_API_KEY, return_direct=True, search_kwargs={"count": 20, "offset": 0}) # other params: freshness, result_filter 
     all_urls = set() # ensures no duplicates
 
     # Each entry in search_tasks is a call to brave search api with query
     # ainvoke creates an awaitable object which needs to be ran with asyncio
-    search_tasks = [search_tool.ainvoke(query) for query in queries]
-    results_list = await asyncio.gather(*search_tasks) # creates a list of returned values from search api
-
-    for results in results_list:
-        for result in results:
-            all_urls.add(result['link'])
+    for query in queries:
+        results = await search_tool.ainvoke(query)
+        results_list = json.loads(results)
+        try:
+            for result in results_list:
+                if isinstance(result, dict) and 'link' in result:
+                    all_urls.add(result['link'])
+                else:
+                    print("ALERT THERE IS AN ERROR HERE RESULT IS NOT A DICT")
+                    breakpoint()
+        except json.JSONDecodeError:
+            print(f"Could not decode JSON from search results for query: {query}")
+        
+        await asyncio.sleep(1) # Wait 1 sec bc of Brave's 1 req/sec limit
 
     found_urls = list(all_urls)
     print(f"INFO: Found {len(found_urls)} unique URLs.")
@@ -147,7 +157,7 @@ async def retrieve_and_parse_node(state: AgentState):
     llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
     structured_llm = llm.with_structured_output(Job, include_raw=False)
 
-    extraction_prompt = ChatGoogleGenerativeAI([
+    extraction_prompt = ChatPromptTemplate.from_messages([
         ("system", f"""You are an expert data extraction agent. Your task is to extract job posting information
         from the provided text content of a web page.
         
@@ -160,8 +170,10 @@ async def retrieve_and_parse_node(state: AgentState):
     ])
     # Creating the llm chain using lcel
     extraction_chain = extraction_prompt | structured_llm
+    # Create the semaphore
+    semaphore = asyncio.Semaphore(5)
     # Creating a list of awaitable objects (bc function is async).
-    extraction_tasks = [_fetch_and_extract_job_data(url, extraction_chain) for url in found_urls]
+    extraction_tasks = [_fetch_and_extract_job_data(url, extraction_chain, semaphore) for url in found_urls]
     # Runs the awaitable objects in extraction_tasks using asyncio
     extracted_job_results = await asyncio.gather(*extraction_tasks)
     # Filters out emptyy jobs in extracted_job_results
