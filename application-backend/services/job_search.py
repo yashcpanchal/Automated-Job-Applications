@@ -51,7 +51,11 @@ async def _fetch_and_extract_job_data(url: str, llm_chain, semaphore: asyncio.Se
     Fetching and cleaning is done through bs4, the rest is done thru the llm chain. LLM chain will append
     all of the relevant data into the job model when it is invoked with the page_text passed in.
     """
-    # Will only enter the function if the semaphore allwos it
+    # Will only enter the function if the semaphore allows it
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
     async with semaphore:
         print(f"Analyzing URL: {url}")
         try:
@@ -60,6 +64,7 @@ async def _fetch_and_extract_job_data(url: str, llm_chain, semaphore: asyncio.Se
                 response.raise_for_status() # Will raise an http error for bad status codes
             soup = BeautifulSoup(response.text, "html.parser")
             page_text = soup.get_text(separator=' ', strip=True)[:60000]
+            
             if not page_text:
                 print("Skipping {url}: No text content found")
                 return None
@@ -157,12 +162,14 @@ async def retrieve_and_parse_node(state: AgentState):
     llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
     structured_llm = llm.with_structured_output(Job, include_raw=False)
 
+    schema_str = json.dumps(Job.model_json_schema()).replace("{", "{{").replace("}", "}}")
+
     extraction_prompt = ChatPromptTemplate.from_messages([
         ("system", f"""You are an expert data extraction agent. Your task is to extract job posting information
         from the provided text content of a web page.
         
         You must extract the information into the following JSON schema:
-        {Job.model_json_schema()}
+        {schema_str}
         
         Pay close attention to finding the direct application URL. If a field is not present, use null.
         Do not invent any information."""),
