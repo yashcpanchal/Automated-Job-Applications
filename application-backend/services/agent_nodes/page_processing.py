@@ -1,6 +1,7 @@
 import httpx
 from bs4 import BeautifulSoup
 import json
+import time
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -13,13 +14,15 @@ async def fetch_page_text_node(state: dict) -> dict:
     Fetches the text content of the current URL being processed.
     """
     print("--- NODE: FETCHING PAGE TEXT ---")
+
+    start_time = time.time()
     urls = state.get("urls_to_process", [])
     index = state.get("url_index", 0)
 
     # Get the current URL using the index
     if index >= len(urls):
         print("  -> ERROR: Index out of bounds. Cannot fetch page.")
-        return {"current_page_text": "", "current_url": ""}
+        return {"current_page_text": "", "current_url": "", "loop_start_time": start_time}
 
     url = urls[index]
     print(f"  -> Fetching: {url}")
@@ -34,10 +37,10 @@ async def fetch_page_text_node(state: dict) -> dict:
         
         soup = BeautifulSoup(response.text, "html.parser")
         page_text = soup.get_text(separator=' ', strip=True)
-        return {"current_page_text": page_text, "current_url": url}
+        return {"current_page_text": page_text, "current_url": url, "loop_start_time": start_time}
     except Exception as e:
         print(f"  -> Skipping {url}: Error fetching page - {e}")
-        return {"current_page_text": "", "current_url": url}
+        return {"current_page_text": "", "current_url": url, "loop_start_time": start_time}
 
 
 async def extract_job_details_node(state: dict) -> dict:
@@ -55,6 +58,7 @@ async def extract_job_details_node(state: dict) -> dict:
     
     # Another agent to parse through the search results retrieved by the search api and format them properly
     llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
+    # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", google_api_key=GOOGLE_API_KEY)
     structured_llm = llm.with_structured_output(Job, include_raw=False)
     
     schema_str = json.dumps(Job.model_json_schema()).replace("{", "{{").replace("}", "}}")

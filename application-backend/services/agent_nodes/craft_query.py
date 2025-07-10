@@ -23,7 +23,7 @@ async def craft_query_node(state: AgentState):
     # Define the prompt template
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are a world-class career assistant and an expert at crafting search engine queries for the Brave Search engine.
-        Your goal is to generate a 1 search query to help a user find relevant job postings.
+        Your goal is to generate 3-5 search queries to help a user find relevant job postings.
 
         **Strategy: Vague to Specific**
         1. Start with broad, simple queries.
@@ -43,7 +43,7 @@ async def craft_query_node(state: AgentState):
         **Example of a BAD Query (Too Specific):**
         - "remote senior software engineer with 5 years of python fastapi and sql experience"
 
-        Now, based on the user's resume and prompt below, generate the query."""),
+        Now, based on the user's resume and prompt below, generate the queries."""),
         ("user", """Here is my resume:
         <resume>
         {resume_text}

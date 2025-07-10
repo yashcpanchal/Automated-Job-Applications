@@ -1,5 +1,7 @@
 from typing import List
 import json
+import time
+import asyncio
 
 # Langgraph imports
 from langgraph.graph import StateGraph, END
@@ -44,8 +46,18 @@ def should_extract_router(state: AgentState) -> str:
 
 # --- Node Functions ---
 
-def increment_index_node(state: AgentState) -> dict:
-    """Increments the URL index and appends any newly extracted job to the list."""
+async def increment_index_node(state: AgentState) -> dict:
+    """Increments the URL index and appends any newly extracted job to the list.
+    Also pauses dynamically to prevent hitting the rate limit."""
+    TARGET_SECONDS_PER_REQUEST = 2.0  # (60 seconds / 30 requests)
+    start_time = state.get("loop_start_time", time.time())
+    time_elapsed = time.time() - start_time
+    sleep_duration = max(0, TARGET_SECONDS_PER_REQUEST - time_elapsed)
+
+    if sleep_duration > 0:
+        print(f"  -> Throttling: sleeping for {sleep_duration:.2f} seconds.")
+        await asyncio.sleep(sleep_duration)
+
     index = state.get("url_index", 0)
     return {
         "url_index": index + 1

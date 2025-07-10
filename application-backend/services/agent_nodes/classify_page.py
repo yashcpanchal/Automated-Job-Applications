@@ -26,6 +26,7 @@ async def classify_page_node(state: dict) -> dict:
 
     # Setup a fast and cheap LLM for classification
     llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
+    # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", google_api_key=GOOGLE_API_KEY, temperature=0)
     structured_llm = llm.with_structured_output(PageClassification)
 
     prompt = ChatPromptTemplate.from_messages([

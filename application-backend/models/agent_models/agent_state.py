@@ -19,6 +19,8 @@ class AgentState(TypedDict):
     
     # Running list of extracted jobs
     extracted_jobs: Annotated[List[Job], operator.add]
+
+    loop_start_time: float
     
     # State for the processing loop
     url_index: int
