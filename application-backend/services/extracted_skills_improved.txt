@@ -1,9 +1,0 @@
-
-        python
-        javascript
-        react
-        fastapi
-        aws
-        docker
-        machine learning
-        

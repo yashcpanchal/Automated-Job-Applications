@@ -8,15 +8,9 @@ from datetime import datetime
 import uuid
 from spacy.matcher import PhraseMatcher
 from dependencies.embedding_model import get_embedding_model
-from geopy.geocoders import Nominatim
-from geopy.distance import geodesic
 import math
 
-# Initialize the geolocator for reverse geocoding
-geolocator = Nominatim(user_agent="job_search_agent")
-# Cache for locations to avoid repeated geocoding
-location_cache = {}
-
+# Initialize spaCy and matcher
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
@@ -26,17 +20,30 @@ except OSError:
 
 matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
 
-SKILLS_FILE_PATH = "extracted_skills_improved.txt"
+import os
+from pathlib import Path
+
+# Get the directory where this script is located
+MODULE_DIR = Path(__file__).parent
+
+# Define the path to the skills file (in the same directory as this script)
+SKILLS_FILE_PATH = MODULE_DIR / "extracted_skills_improved.txt"
+
 skill_phrases = []
 try:
     with open(SKILLS_FILE_PATH, 'r', encoding='utf-8') as f:
         for line in f:
             # Clean each line: strip leading/trailing whitespace, remove quotes if present, and convert to lowercase
-            skill = line.strip().strip('",').lower()
-            if skill: # Only add if the cleaned line is not empty
+            skill = line.strip().strip('"').lower()
+            if skill:  # Only add if the cleaned line is not empty
                 skill_phrases.append(skill)
+    print(f"Loaded {len(skill_phrases)} skills from {SKILLS_FILE_PATH}")
 except FileNotFoundError:
     print(f"Error: The skills file '{SKILLS_FILE_PATH}' was not found.")
+    # Add some default skills to prevent errors
+    skill_phrases = ["python", "machine learning", "data science"]
+    print(f"Using default skills: {', '.join(skill_phrases)}")
+
 # Create a PhraseMatcher to match skill phrases and make doc objects for each phrase
 patterns = [nlp.make_doc(phrase) for phrase in skill_phrases]
 matcher.add("SKILLS", patterns)
@@ -52,58 +59,11 @@ EXPERIENCE_LEVELS = {
 
 MAX_EXPERIENCE_DIFF = 4
 
-def get_location_coordinates(location_name: str) -> Optional[tuple[float, float]]:
-    """
-    Retrieves latitude and longitude for specified location
-
-    Args:
-        location_name (str): The name of the location to geocode.
-
-    Returns:
-        Optional[tuple[float, float]]: A tuple containing latitude and longitude if found,
-                                       otherwise None.
-    """
-    if not location_name:
-        return None
-    if location_name.lower() in location_cache:
-        # Check if already cached
-        return location_cache[location_name.lower()]
-    try:
-        # Use geopy to get the coordinates
-        location = geolocator.geocode(location_name)
-        if location:
-            coords = (location.latitude, location.longitude)
-            location_cache[location_name.lower()] = coords
-            return coords
-        else:
-            return None
-    except Exception as e:
-        print(f"Error geocoding location '{location_name}': {e}")
-        return None
-
-def compute_proximity_score(user_coordinates, job_coordinates, decay_factor=0.2):
-    """
-    Computes a proximity score based on the distance between user and job coordinates.
-    Args:
-        user_coordinates (tuple): A tuple containing the user's latitude and longitude.
-        job_coordinates (tuple): A tuple containing the job's latitude and longitude.
-        decay_factor (float): The factor by which the score decays with distance.
-    Returns:
-        float: A proximity score between 0 and 1, where 1 means the job is at the user's location.
-    """
-    if not user_coordinates or not job_coordinates:
-        return 0.3
-    distance = geodesic(user_coordinates, job_coordinates).kilometers
-    # Closer the job, higher the score; decays exponentially with distance
-    score = math.exp(-decay_factor * distance)
-    return max(0.0, min(score, 1.0))
-
 def parse_resume(resume_text: str) -> Dict[str, Any]:
     """
     Parses resume text to extract skills 
     Returns a dictionary with skills and other relevant information.
     """
-
     doc = nlp(resume_text.lower())
     skills = []
     for match_id, start, end in matcher(doc):
@@ -119,12 +79,12 @@ def parse_resume(resume_text: str) -> Dict[str, Any]:
         experience_level = "internship"
     # Then check for general entry-level terms if not already classified as internship
     elif any(term in doc.text for term in ["entry-level", "junior", "new grad"]):
-        experience_level = "entry_level" # Corrected from "entry-level" to "entry_level" for consistency
+        experience_level = "entry_level"  # Corrected from "entry-level" to "entry_level" for consistency
     elif any(term in doc.text for term in ["mid-level", "3+ years"]):
         experience_level = "mid-level"
-    elif any(term in doc.text for term in ["senior", "5+ years", "sr."]): # 'lead', 'staff', 'principal' could imply lead tier
+    elif any(term in doc.text for term in ["senior", "5+ years", "sr."]):  # 'lead', 'staff', 'principal' could imply lead tier
         experience_level = "senior"
-    elif any(term in doc.text for term in ["lead", "staff", "principal"]): # Explicitly capture lead tier
+    elif any(term in doc.text for term in ["lead", "staff", "principal"]):  # Explicitly capture lead tier
         experience_level = "lead"
     
     return {
@@ -138,7 +98,6 @@ def parse_job_description(job_description: str):
     Parses job description text to extract skills 
     Returns a dictionary with skills and other relevant information.
     """
-
     doc = nlp(job_description.lower())
     skills = []
     for match_id, start, end in matcher(doc):
@@ -153,13 +112,13 @@ def parse_job_description(job_description: str):
     if any(term in doc.text for term in ["intern", "internship", "collegiate", "student"]):
         experience_level = "internship"
     # Then check for general entry-level terms if not already classified as internship
-    elif any(term in doc.text for term in ["entry level", "junior", "new grad"]): # Note: "entry level" with space for job descriptions
-        experience_level = "entry_level" # Corrected from "entry-level" to "entry_level" for consistency
+    elif any(term in doc.text for term in ["entry level", "junior", "new grad"]):  # Note: "entry level" with space for job descriptions
+        experience_level = "entry_level"  # Corrected from "entry-level" to "entry_level" for consistency
     elif any(term in doc.text for term in ["mid-level", "3+ years"]):
         experience_level = "mid-level"
-    elif any(term in doc.text for term in ["senior", "5+ years", "sr."]): # 'lead', 'staff', 'principal' could imply lead tier
+    elif any(term in doc.text for term in ["senior", "5+ years", "sr."]):  # 'lead', 'staff', 'principal' could imply lead tier
         experience_level = "senior"
-    elif any(term in doc.text for term in ["lead", "staff", "principal"]): # Explicitly capture lead tier
+    elif any(term in doc.text for term in ["lead", "staff", "principal"]):  # Explicitly capture lead tier
         experience_level = "lead"
 
     job_type = "not specified"
@@ -217,7 +176,7 @@ def filter_job(
     # 2. Job type preference filtering
     if filter_criteria['job_type_preference']:
         if parsed_job['job_type'] not in filter_criteria['job_type_preference'] and parsed_job['job_type'] != "not specified":
-            return None # Fails job type filter
+            return None  # Fails job type filter
 
     # 3. Location based filtering
     if filter_criteria.get('location_preference') == 'remote_only':
@@ -243,13 +202,12 @@ def filter_job(
         doc_job_desc = nlp(job.description.lower())
         job_desc_tokens = {token.lemma_ for token in doc_job_desc if not token.is_stop and not token.is_punct}
         if not any(keyword in job_desc_tokens for keyword in prompt_keywords):
-            return None # Fails prompt keyword filter
+            return None  # Fails prompt keyword filter
 
     # If all filters pass, return the parsed job data
     return parsed_job
 
-
-def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt: str, model: Any) -> List[Job]:
+async def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt: str, model: Any) -> List[Job]:
     """
     Ranks and filters jobs based on resume and search prompt.
     
@@ -262,6 +220,7 @@ def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt: str, 
     Returns:
         List[Job]: A list of Job objects sorted by their relevance score, filtered based on the criteria.
     """
+    from .location import get_location_coordinates, compute_proximity_score
 
     weights = {
         'resume_match': 0.4,
@@ -297,29 +256,23 @@ def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt: str, 
 
     # Iterate through each job and calculate its score based on the resume and search prompt
     for job in jobs:
-        # parsed_job = filter_job(job, parsed_resume, search_prompt, filter)
-        # if parsed_job is None:
-        #     continue
         parsed_job = parse_job_description(job.description)
         if parsed_job is None:
             continue
+            
         preprocessed_job_desc = preprocess_text(parsed_job['raw_text'])
-        # First filter out jobs based on a variety of criteria
         preprocessed_job_title = preprocess_text(job.title)
             
         job_desc_encoded = model.encode(preprocessed_job_desc)
         job_title_encoded = model.encode(preprocessed_job_title)
 
         resume_similarity = cosine_similarity(resume_encoded.reshape(1, -1), job_desc_encoded.reshape(1, -1))[0][0]
-        prompt_similarity = cosine_similarity(prompt_encoded.reshape(1, -1), job_desc_encoded.reshape(1, -1))[0][0]
+        prompt_similarity = cosine_similarity(prompt_encoded.reshape(1, -1), job_desc_encoded.reshape(1, -1))[0][0] if prompt_encoded is not None else 0.0
 
         # Non-linear boost for prompt similarity if it exceeds the threshold
         if prompt_encoded is not None and prompt_similarity > filter['prompt_boost_threshold']:
             prompt_similarity *= filter['prompt_boost_factor']
             prompt_similarity = min(prompt_similarity, 1.0)
-        
-
-
 
         # Calculate skill overlap as the Jaccard similarity between the skills in the resume and job description
         resume_skills_set = set(parsed_resume['skills'])
@@ -331,11 +284,11 @@ def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt: str, 
 
         # Ensure experience levels are comparable
         if resume_experience_level == -1 and job_experience_level == -1:
-            experience_match = 1.0 # Both 'not specified', considered a perfect match in this context
+            experience_match = 1.0  # Both 'not specified', considered a perfect match in this context
         elif resume_experience_level == -1 or job_experience_level == -1:
-            experience_match = 0.5 # One is 'not specified', the other is a defined level
+            experience_match = 0.5  # One is 'not specified', the other is a defined level
         else:
-            # Add an sigmoid decay to penalize large differences in experience levels
+            # Add a sigmoid decay to penalize large differences in experience levels
             experience_diff = abs(resume_experience_level - job_experience_level)
             experience_match = 1 - math.log2(1 + experience_diff) / math.log2(1 + MAX_EXPERIENCE_DIFF)
 
@@ -346,19 +299,19 @@ def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt: str, 
         role_relevance = 1.0
         if prompt_encoded is not None:
             title_prompt_similarity = cosine_similarity(prompt_encoded.reshape(1, -1), job_title_encoded.reshape(1, -1))[0][0]
-            if (title_prompt_similarity < filter['role_relevance_threshold']):
+            if title_prompt_similarity < filter['role_relevance_threshold']:
                 role_relevance -= (1.0 - title_prompt_similarity) * filter['role_relevance_boost_factor']
-                role_relevance = max(role_relevance, 0.0) # Ensure it doesn't go negative
+                role_relevance = max(role_relevance, 0.0)  # Ensure it doesn't go negative
         
         # Do the same thing above for resume
         title_resume_similarity = cosine_similarity(resume_encoded.reshape(1, -1), job_title_encoded.reshape(1, -1))[0][0]
-        if (title_resume_similarity < filter['role_relevance_threshold']):
+        if title_resume_similarity < filter['role_relevance_threshold']:
             role_relevance -= (1.0 - title_resume_similarity) * filter['role_relevance_boost_factor']
-            role_relevance = max(role_relevance, 0.0) # Ensure it doesn't go negative
+            role_relevance = max(role_relevance, 0.0)  # Ensure it doesn't go negative
 
         # Calculate the proximity score if location is provided
-        user_coordinates = get_location_coordinates(parsed_resume.get('location', ''))
-        job_coordinates = get_location_coordinates(job.location) if job.location else None
+        user_coordinates = await get_location_coordinates(parsed_resume.get('location', ''))
+        job_coordinates = await get_location_coordinates(job.location) if job.location else None
         proximity_score = compute_proximity_score(user_coordinates, job_coordinates) if user_coordinates and job_coordinates else 0.3
 
         score = (
