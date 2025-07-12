@@ -27,6 +27,9 @@ class AgentState(TypedDict):
     current_url: str
     current_page_text: str
     current_page_classification: str
+
+    # Playwright page
+    page: object
     
     # This key is set by the final node, but we define it here for completeness.
     final_jobs: List[Job]

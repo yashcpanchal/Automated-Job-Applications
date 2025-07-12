@@ -16,6 +16,7 @@ from services.agent_nodes.web_search import find_urls_node
 from services.agent_nodes.page_processing import fetch_page_text_node, extract_job_details_node
 from services.agent_nodes.classify_page import classify_page_node
 from services.agent_nodes.process_match import process_and_match_node
+from services.utils.playwright_manager import PlaywrightManager
 
 # --- Router Functions ---
 
@@ -115,12 +116,18 @@ class JobSearchService:
     
     async def search_and_process_jobs(self, resume_text: str, search_prompt: str) -> List[Job]:
         print("\n🚀 --- STARTING AGENTIC JOB SEARCH --- 🚀")
-        initial_state = {"resume_text": resume_text, "search_prompt": search_prompt}
+
+        async with PlaywrightManager() as page:
+            initial_state = {
+                "resume_text": resume_text,
+                "search_prompt": search_prompt,
+                "page": page # Dependency Injection
+            }
         
-        final_state = await self.app.ainvoke(initial_state, config={"recursion_limit": 500})
-        
-        # Retrieve the list from the 'final_jobs' key, which is set by the last node in the graph.
-        final_jobs = final_state.get('final_jobs', [])
+            final_state = await self.app.ainvoke(initial_state, config={"recursion_limit": 500})
+            
+            # Retrieve the list from the 'final_jobs' key, which is set by the last node in the graph.
+            final_jobs = final_state.get('final_jobs', [])
 
         print("✅ --- AGENTIC JOB SEARCH COMPLETE --- ✅\n")
         if final_jobs:
