@@ -13,10 +13,10 @@ class Job(BaseModel):
     company: str = Field(..., description="Name of the company hiring for this position")
     location: Optional[str] = Field(None, description="The physical location of the job (e.g., 'San Francisco, CA').")
     description: str = Field(..., description="The full job description text.")
-    application_url: HttpUrl = Field(..., description="The direct URL to the application page for this job.")
-    date_posted: Optional[datetime] = Field(None, description="The date the job was originally posted.")
-    source_url: HttpUrl = Field(..., description="The original URL where the job listing was found.")
-    
+    application_url: Optional[str] = Field(None, description="The direct URL to the application page for this job.")
+    date_posted: Optional[str] = Field(None, description="The date the job was originally posted.")
+    source_url: str = Field(..., description="The original URL where the job listing was found.")
+    score: Optional[float] = Field(None, description="The ranking score of the job based on similarities to the user's resume and prompt.")
     
     class Config:
         # This allows us to use `_id` as the field name in MongoDB but `id` in our Pydantic model
@@ -31,6 +31,7 @@ class Job(BaseModel):
                 "application_url": "https://apply.workable.com/tech-solutions/j/12345ABCDE/",
                 "date_posted": "2023-10-27T10:00:00Z",
                 "source_url": "https://www.linkedin.com/jobs/view/1234567890/"
+                
             }
         }
     

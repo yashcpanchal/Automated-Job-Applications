@@ -178,3 +178,7 @@ cython_debug/
 
 # Hide the testing folder
 testing/
+
+# macOS specific files
+.DS_Store
+
