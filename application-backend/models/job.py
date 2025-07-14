@@ -8,7 +8,7 @@ class Job(BaseModel):
     Represents a single job listing which will be retrieved by the AI search agent.
     Will be stored in the 'job-data-collection' in the mongodb
     """
-    id: str = Field(default_factory=lambda: str(uuid.uuid64()), alias="_id")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
     title: str = Field(..., description="Official title of the job (e.g., 'intern')")
     company: str = Field(..., description="Name of the company hiring for this position")
     location: Optional[str] = Field(None, description="The physical location of the job (e.g., 'San Francisco, CA').")
@@ -20,7 +20,7 @@ class Job(BaseModel):
     
     class Config:
         # This allows us to use `_id` as the field name in MongoDB but `id` in our Pydantic model
-        populate_by_name = True 
+        populate_by_name = True
         # Example to show the model's schema in OpenAPI docs
         json_schema_extra = {
             "example": {
@@ -31,7 +31,5 @@ class Job(BaseModel):
                 "application_url": "https://apply.workable.com/tech-solutions/j/12345ABCDE/",
                 "date_posted": "2023-10-27T10:00:00Z",
                 "source_url": "https://www.linkedin.com/jobs/view/1234567890/"
-                
             }
         }
-    
