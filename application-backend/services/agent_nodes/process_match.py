@@ -47,6 +47,6 @@ async def process_and_match_node(state: AgentState) -> dict:
         print("WARNING: Returning original job list due to error")
         # Keep the original jobs in case of error
         state['extracted_jobs'] = extracted_jobs
-
+        
     # For now, we'll just assume all extracted jobs are relevant.
     return {"final_jobs": state['extracted_jobs']}
