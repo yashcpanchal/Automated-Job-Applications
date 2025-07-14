@@ -1,5 +1,5 @@
 from models.agent_models.agent_state import AgentState
-from services.ranking import rank_and_filter_jobs
+from services.ranking.ranker import rank_and_filter_jobs
 from models.job import Job
 from dependencies.embedding_model import get_embedding_model
 
