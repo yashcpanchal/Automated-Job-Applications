@@ -7,7 +7,7 @@ load_dotenv()
 MONGODB_URI = os.getenv("MONGODB_URI")
 DATABASE_NAME = "job-application-bot-db"
 USER_COLLECTION = "user-data-collection"
-JOB_DATA_COLLECTION = "job-data-collection"
+JOB_DATA_COLLECTION = "job-data"
 TEST_COLLECTION = "test-collection"
 
 # Jsearch API

@@ -3,6 +3,12 @@ import json
 import time
 import asyncio
 
+
+# Langchain and Langgraph imports
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.messages import BaseMessage, SystemMessage
+from typing import List
+import json
 # Langgraph imports
 from langgraph.graph import StateGraph, END
 
@@ -37,7 +43,6 @@ def should_extract_router(state: AgentState) -> str:
     """The 'gatekeeper' router."""
     print("--- ROUTER: SHOULD EXTRACT? ---")
     classification = state.get("current_page_classification", "IRRELEVANT")
-    
     if classification == "JOB_DESCRIPTION":
         print("  -> Decision: YES, page is a job description.")
         return "extract_details"
