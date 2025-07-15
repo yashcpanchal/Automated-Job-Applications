@@ -1,5 +1,5 @@
-# import httpx
-# from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup
+
 import json
 import time
 
@@ -39,7 +39,7 @@ async def fetch_page_text_node(state: dict) -> dict:
         html_content = await page.content()
         
         # Use BeautifulSoup on the final HTML to extract clean text
-        from bs4 import BeautifulSoup
+        
         soup = BeautifulSoup(html_content, "html.parser")
         page_text = soup.get_text(separator=' ', strip=True)
         
@@ -48,23 +48,6 @@ async def fetch_page_text_node(state: dict) -> dict:
     except Exception as e:
         print(f"  -> Skipping {url}: Error during Playwright navigation - {e}")
         return {"current_page_text": "", "current_url": url, "loop_start_time": start_time}
-
-
-    # headers = {
-    #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    # }
-    # try:
-    #     async with httpx.AsyncClient(headers=headers, verify=False, timeout=15.0) as client:
-    #         response = await client.get(url, follow_redirects=True)
-    #         response.raise_for_status()
-        
-    #     soup = BeautifulSoup(response.text, "html.parser")
-    #     page_text = soup.get_text(separator=' ', strip=True)
-    #     return {"current_page_text": page_text, "current_url": url, "loop_start_time": start_time}
-    # except Exception as e:
-    #     print(f"  -> Skipping {url}: Error fetching page - {e}")
-    #     return {"current_page_text": "", "current_url": url, "loop_start_time": start_time}
-
 
 async def extract_job_details_node(state: dict) -> dict:
     """

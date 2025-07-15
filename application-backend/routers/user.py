@@ -3,7 +3,6 @@ from dependencies.database import DatabaseDependency
 from dependencies.embedding_model import ModelDependency
 from core.config import USER_COLLECTION
 from datetime import datetime
-from schemas.user import UserCreate # User creation schema
 
 router = APIRouter(
     prefix="/user-input",
