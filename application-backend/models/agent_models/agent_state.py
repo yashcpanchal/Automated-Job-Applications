@@ -8,6 +8,7 @@ class AgentState(TypedDict):
     of truth for the agent's memory structure.
     """
     # Inputs from the user
+    user_id: str
     resume_text: str
     search_prompt: str
     

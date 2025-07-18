@@ -3,7 +3,7 @@ import json
 
 
 # Langchain and Langgraph imports
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.messages import BaseMessage, SystemMessage
 from typing import List
 import json
@@ -28,6 +28,7 @@ def should_continue_router(state: AgentState) -> str:
     print("--- ROUTER: SHOULD CONTINUE? ---")
     urls = state.get("urls_to_process", [])
     index = state.get("url_index", 0)
+
     
     if index >= len(urls):
         print("  -> Decision: NO, processed all URLs. Finishing.")
@@ -106,9 +107,9 @@ class JobSearchService:
         # Compile the graph
         self.app = workflow.compile()
     
-    async def search_and_process_jobs(self, resume_text: str, search_prompt: str) -> List[Job]:
+    async def search_and_process_jobs(self, user_id: str, resume_text: str, search_prompt: str) -> List[Job]:
         print("\n🚀 --- STARTING AGENTIC JOB SEARCH --- 🚀")
-        initial_state = {"resume_text": resume_text, "search_prompt": search_prompt}
+        initial_state = {"user_id": user_id, "resume_text": resume_text, "search_prompt": search_prompt}
         
         final_state = await self.app.ainvoke(initial_state, config={"recursion_limit": 500})
         

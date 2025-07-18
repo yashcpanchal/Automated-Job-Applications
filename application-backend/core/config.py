@@ -7,7 +7,7 @@ load_dotenv()
 MONGODB_URI = os.getenv("MONGODB_URI")
 DATABASE_NAME = "job-application-bot-db"
 USER_COLLECTION = "user-data-collection"
-JOB_DATA_COLLECTION = "job-data-collection"
+JOB_DATA_COLLECTION = "job-data"
 TEST_COLLECTION = "test-collection"
 
 # Jsearch API
@@ -31,3 +31,8 @@ if not JSEARCH_API_KEY:
     print("JSEARCH API KEY NOT FOUND")
 if not GOOGLE_API_KEY:
     print("GOOGLE API KEY NOT FOUND")
+
+# Redis
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+
