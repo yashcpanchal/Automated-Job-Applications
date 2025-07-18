@@ -13,32 +13,6 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Ensure output is streamed directly to the terminal without buffering
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies required by Playwright browsers
-# These are common dependencies for running headless browsers
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-#     libsndfile1 \
-#     libnss3 \
-#     libfontconfig1 \
-#     libatk-bridge2.0-0 \
-#     libdrm-dev \
-#     libgtk-3-0 \
-#     libasound2 \
-#     libsecret-1-0 \
-#     libu2f-udev \
-#     libvulkan1 \
-#     libxkbcommon0 \
-#     libxcomposite1 \
-#     libxdamage1 \
-#     libxext6 \
-#     libxfixes3 \
-#     libxrandr2 \
-#     libxshmfence1 \
-#     libxtst6 \
-#     libgbm1 \
-#     xdg-utils \
-#     # Clean up apt caches to keep image size small
-#     && rm -rf /var/lib/apt/lists/*
-
 # Copy the Python dependency files into the container.
 COPY requirements.txt .
 

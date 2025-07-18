@@ -39,3 +39,15 @@ class Job(BaseModel):
         if model:
             job.update_embeddings(model)
         return job
+        # Example to show the model's schema in OpenAPI docs
+        # json_schema_extra = {
+        #     "example": {
+        #         "title": "Senior Backend Engineer",
+        #         "company": "Tech Solutions Inc.",
+        #         "location": "Remote",
+        #         "description": "Seeking a skilled backend engineer with experience in Python and cloud services...",
+        #         "application_url": "https://apply.workable.com/tech-solutions/j/12345ABCDE/",
+        #         "date_posted": "2023-10-27T10:00:00Z",
+        #         "source_url": "https://www.linkedin.com/jobs/view/1234567890/"
+        #     }
+        # }
