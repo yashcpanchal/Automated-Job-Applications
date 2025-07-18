@@ -1,56 +1,27 @@
-import spacy
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple, NamedTuple
+import numpy as np
 from models.job import Job
 from pydantic import BaseModel, Field, HttpUrl
 from datetime import datetime
-import uuid
-from spacy.matcher import PhraseMatcher
-from dependencies.embedding_model import get_embedding_model
 import math
+import heapq
+from sklearn.metrics.pairwise import cosine_similarity
+from collections import namedtuple
 
-# Initialize spaCy and matcher
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    print("Downloading en_core_web_sm model.")
-    spacy.cli.download("en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+from services.pdf_processing.parse_resume import parse_job_description
+from dependencies.embedding_model import get_embedding_model
+from services.ranking.location import get_location_coordinates, compute_proximity_score
+from models.user import User
 
-matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
+# Define a named tuple to store job scores
+JobScore = namedtuple('JobScore', ['job', 'score', 'resume_similarity', 'prompt_similarity', 
+                                 'skill_overlap', 'experience_match'])
 
-import os
-from pathlib import Path
 
-# Get the directory where this script is located
-MODULE_DIR = Path(__file__).parent
-
-# Define the path to the skills file (in the same directory as this script)
-SKILLS_FILE_PATH = MODULE_DIR / "extracted_skills_improved.txt"
-
-skill_phrases = []
-try:
-    with open(SKILLS_FILE_PATH, 'r', encoding='utf-8') as f:
-        for line in f:
-            # Clean each line: strip leading/trailing whitespace, remove quotes if present, and convert to lowercase
-            skill = line.strip().strip('"').lower()
-            if skill:  # Only add if the cleaned line is not empty
-                skill_phrases.append(skill)
-    print(f"Loaded {len(skill_phrases)} skills from {SKILLS_FILE_PATH}")
-except FileNotFoundError:
-    print(f"Error: The skills file '{SKILLS_FILE_PATH}' was not found.")
-    # Add some default skills to prevent errors
-    skill_phrases = ["python", "machine learning", "data science"]
-    print(f"Using default skills: {', '.join(skill_phrases)}")
-
-# Create a PhraseMatcher to match skill phrases and make doc objects for each phrase
-patterns = [nlp.make_doc(phrase) for phrase in skill_phrases]
-matcher.add("SKILLS", patterns)
-
+# Experience level constants
 EXPERIENCE_LEVELS = {
     "internship": 0, 
-    "entry-level": 1,
+    "entry_level": 1,
     "mid-level": 2,
     "senior": 3,
     "lead": 4,
@@ -59,219 +30,189 @@ EXPERIENCE_LEVELS = {
 
 MAX_EXPERIENCE_DIFF = 4
 
-def parse_resume(resume_text: str) -> Dict[str, Any]:
+def calculate_similarity(embedding1: List[float], embedding2: List[float]) -> float:
     """
-    Parses resume text to extract skills 
-    Returns a dictionary with skills and other relevant information.
-    """
-    doc = nlp(resume_text.lower())
-    skills = []
-    for match_id, start, end in matcher(doc):
-        span = doc[start:end]
-        skills.append(span.text)
-    
-    # Remove duplicates by converting to a set and back to a list
-    skills = list(set(skills))
-    
-    experience_level = "not specified"
-    # Prioritize internship detection
-    if any(term in doc.text for term in ["intern", "internship", "collegiate", "student"]):
-        experience_level = "internship"
-    # Then check for general entry-level terms if not already classified as internship
-    elif any(term in doc.text for term in ["entry-level", "junior", "new grad"]):
-        experience_level = "entry_level"  # Corrected from "entry-level" to "entry_level" for consistency
-    elif any(term in doc.text for term in ["mid-level", "3+ years"]):
-        experience_level = "mid-level"
-    elif any(term in doc.text for term in ["senior", "5+ years", "sr."]):  # 'lead', 'staff', 'principal' could imply lead tier
-        experience_level = "senior"
-    elif any(term in doc.text for term in ["lead", "staff", "principal"]):  # Explicitly capture lead tier
-        experience_level = "lead"
-    
-    return {
-        "raw_text": resume_text,
-        "skills": skills,
-        "experience_level": experience_level,
-    }
-
-def parse_job_description(job_description: str):
-    """
-    Parses job description text to extract skills 
-    Returns a dictionary with skills and other relevant information.
-    """
-    doc = nlp(job_description.lower())
-    skills = []
-    for match_id, start, end in matcher(doc):
-        span = doc[start:end]
-        skills.append(span.text)
-    
-    # Remove duplicates by converting to a set and back to a list
-    skills = list(set(skills))
-    
-    experience_level = "not specified"
-    # Prioritize internship detection
-    if any(term in doc.text for term in ["intern", "internship", "collegiate", "student"]):
-        experience_level = "internship"
-    # Then check for general entry-level terms if not already classified as internship
-    elif any(term in doc.text for term in ["entry level", "junior", "new grad"]):  # Note: "entry level" with space for job descriptions
-        experience_level = "entry_level"  # Corrected from "entry-level" to "entry_level" for consistency
-    elif any(term in doc.text for term in ["mid-level", "3+ years"]):
-        experience_level = "mid-level"
-    elif any(term in doc.text for term in ["senior", "5+ years", "sr."]):  # 'lead', 'staff', 'principal' could imply lead tier
-        experience_level = "senior"
-    elif any(term in doc.text for term in ["lead", "staff", "principal"]):  # Explicitly capture lead tier
-        experience_level = "lead"
-
-    job_type = "not specified"
-    if "internship" in doc.text or "intern " in doc.text:
-        job_type = "internship"
-    elif "full-time" in doc.text or "entry-level" in doc.text or "junior" in doc.text:
-        job_type = "entry_level"
-    
-    return {
-        "raw_text": job_description.lower(),
-        "skills": skills,
-        "experience_level": experience_level,
-        "job_type": job_type
-    }
-
-def preprocess_text(text: str) -> str:
-    """
-    Preprocesses text by removing extra spaces and converting to lowercase.
-    """
-    return text.lower().strip()
-
-def filter_job(
-    job: Job,
-    parsed_resume: Dict[str, Any],
-    search_prompt: str,
-    filter_criteria: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
-    """
-    Applies various filters to a single job.
-
-    Args:
-        job (Job): The job object to filter.
-        parsed_resume (Dict[str, Any]): Parsed resume data.
-        search_prompt (str): The original search prompt.
-        filter_criteria (Dict[str, Any]): Dictionary containing filtering rules.
-
-    Returns:
-        Optional[Dict[str, Any]]: The parsed job data if it passes all filters,
-                                   otherwise None.
-    """
-    parsed_job = parse_job_description(job.description)
-
-    # 1. Experience level filtering
-    if filter_criteria['strict_experience_match']:
-        resume_exp = parsed_resume['experience_level']
-        job_exp = parsed_job['experience_level']
-
-        is_resume_junior_or_intern = (resume_exp in ["internship", "entry_level"])
-        is_job_senior_or_lead = (job_exp in ["senior", "lead"])
-
-        if (is_resume_junior_or_intern and is_job_senior_or_lead) or \
-           (resume_exp in ["senior", "lead"] and (job_exp in ["internship", "entry_level"])):
-            return None
-
-    # 2. Job type preference filtering
-    if filter_criteria['job_type_preference']:
-        if parsed_job['job_type'] not in filter_criteria['job_type_preference'] and parsed_job['job_type'] != "not specified":
-            return None  # Fails job type filter
-
-    # 3. Location based filtering
-    if filter_criteria.get('location_preference') == 'remote_only':
-        if job.location is None or "remote" not in job.location.lower():
-            # return None # Uncomment to re-enable hard filter
-            pass
-    elif filter_criteria.get('location_preference') == 'local_only':
-        # This is a basic string check. For strict radius filter,
-        # one would check get_coordinates and geodesic distance here.
-        if job.location is None or "remote" in job.location.lower():
-            # return None # Uncomment to re-enable hard filter
-            pass
-
-    if filter_criteria.get('preferred_locations'):
-        if job.location is None or not any(loc.lower() in job.location.lower() for loc in filter_criteria['preferred_locations']):
-            # return None # Uncomment to re-enable hard filter
-            pass
-
-    # 4. Prompt-based keyword filtering
-    if filter_criteria['require_prompt_keywords'] and search_prompt:
-        doc_prompt = nlp(search_prompt.lower())
-        prompt_keywords = {token.lemma_ for token in doc_prompt if not token.is_stop and not token.is_punct}
-        doc_job_desc = nlp(job.description.lower())
-        job_desc_tokens = {token.lemma_ for token in doc_job_desc if not token.is_stop and not token.is_punct}
-        if not any(keyword in job_desc_tokens for keyword in prompt_keywords):
-            return None  # Fails prompt keyword filter
-
-    # If all filters pass, return the parsed job data
-    return parsed_job
-
-async def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt: str, model: Any) -> List[Job]:
-    """
-    Ranks and filters jobs based on resume and search prompt.
+    Calculate cosine similarity between two embeddings.
     
     Args:
-        jobs (List[Job]): List of Job objects to be ranked and filtered.
-        resume_text (str): The text of the resume to match against job descriptions.
-        search_prompt (str): The search prompt to match against job titles and descriptions.
-        model (ModelDependency): The embedding model dependency for vectorization.
-    
+        embedding1: First embedding vector
+        embedding2: Second embedding vector
+        
     Returns:
-        List[Job]: A list of Job objects sorted by their relevance score, filtered based on the criteria.
+        Cosine similarity score between the two embeddings
     """
-    from .location import get_location_coordinates, compute_proximity_score
-
-    weights = {
-        'resume_match': 0.4,
-        'prompt_match': 0.2,
-        'skill_overlap': 0.15,
-        'experience_match': 0.1,
-        'job_description_match': 0.1,
-        'proximity_score': 0.05
-    }
-    filter = {
-        'min_overall_score': 0.1,
-        'min_skill_match_percentage': 0.0,
-        'strict_experience_match': True,
-        'require_prompt_keywords': False,
-        'job_type_preference': [],
-        'location_preference': 'any',
-        'preferred_locations': [],
-        'prompt_boost_threshold': 0.5,
-        'prompt_boost_factor': 1.2,
-        'role_relevance_threshold': 0.3,
-        'role_relevance_boost_factor': 0.5
-    }
+    if not embedding1 or not embedding2:
+        return 0.0
+        
+    # Convert to numpy arrays if they're not already
+    emb1 = np.array(embedding1).reshape(1, -1)
+    emb2 = np.array(embedding2).reshape(1, -1)
     
-    # Parse and preprocess the resume and search prompt
-    parsed_resume = parse_resume(resume_text)
-    preprocessed_resume = preprocess_text(parsed_resume['raw_text'])
-    preprocessed_prompt = preprocess_text(search_prompt)
+    return cosine_similarity(emb1, emb2)[0][0]
 
-    resume_encoded = model.encode(preprocessed_resume)
-    prompt_encoded = model.encode(preprocessed_prompt) if preprocessed_prompt else None
 
-    ranked_jobs_list: List[Job] = []
+async def rank_and_filter_jobs(
+    jobs: List[Job], 
+    resume_text: str, 
+    search_prompt: str, 
+    model: Any,
+    filter_params: Optional[Dict[str, Any]] = None
+) -> List[Job]:
+    """
+    Ranks and filters jobs based on resume text and search prompt.
+    
+    Args:
+        jobs: List of Job objects to be ranked and filtered
+        resume_text: The text content of the user's resume
+        search_prompt: The search prompt to match against job titles and descriptions
+        model: The embedding model for encoding
+        filter_params: Dictionary of filter parameters
+        
+    Returns:
+        List of Job objects sorted by relevance score
+    """
+    if not jobs:
+        return []
 
-    # Iterate through each job and calculate its score based on the resume and search prompt
+    # Default filter parameters if not provided
+    if filter_params is None:
+        filter_params = {
+            'max_distance_km': 50,
+            'remote_ok': True,
+            'min_salary': 0,
+            'max_salary': float('inf'),
+            'job_type': 'any',
+            'experience_level': 'any',
+            'location_preference': 'any',
+            'preferred_locations': [],
+            'prompt_boost_threshold': 0.5,
+            'prompt_boost_factor': 1.2,
+            'role_relevance_threshold': 0.3,
+            'role_relevance_boost_factor': 0.5,
+            'min_overall_score': 0.0,
+            'weights': {
+                'resume_match': 0.4,
+                'prompt_match': 0.3,
+                'skill_overlap': 0.2,
+                'experience_match': 0.1,
+                'job_description_match': 0.4,
+                'proximity_score': 0.3
+            }
+        }
+    else:
+        # Ensure weights are defined in filter_params
+        if 'weights' not in filter_params:
+            filter_params['weights'] = {
+                'resume_match': 0.4,
+                'prompt_match': 0.3,
+                'skill_overlap': 0.2,
+                'experience_match': 0.1,
+                'job_description_match': 0.4,
+                'proximity_score': 0.3
+            }
+    
+    # Parse the resume to get skills and experience level
+    from services.pdf_processing.parse_resume import parse_resume
+    parsed_resume, resume_embedding = parse_resume(resume_text)
+    
+    # Generate embedding for the resume if not already available
+    if not resume_embedding:
+        resume_embedding = model.encode(resume_text).tolist()
+    
+    # Encode the search prompt if provided
+    prompt_embedding = None
+    if search_prompt:
+        try:
+            prompt_embedding = model.encode(search_prompt).tolist()
+        except Exception as e:
+            print(f"Error encoding search prompt: {e}")
+            prompt_embedding = None
+
+    # Parse job descriptions and calculate similarities using a min-heap for top 100 jobs
+    top_k_heap = []
+    k = 100
+    
     for job in jobs:
-        parsed_job = parse_job_description(job.description)
-        if parsed_job is None:
+        # Skip if job doesn't meet basic criteria
+        if not hasattr(job, 'description') or not job.description:
             continue
             
-        preprocessed_job_desc = preprocess_text(parsed_job['raw_text'])
-        preprocessed_job_title = preprocess_text(job.title)
+        # Parse the job description
+        parsed_job = parse_job_description(job.description)
+        
+        # If job doesn't have an embedding, generate one
+        if not hasattr(job, 'description_embedding') or not job.description_embedding:
+            job.description_embedding = model.encode(job.description).tolist()
+        
+        # Calculate similarity between resume and job description
+        resume_similarity = calculate_similarity(resume_embedding, job.description_embedding)
+        
+        # Calculate prompt similarity if search prompt was provided
+        prompt_similarity = 0.0
+        if prompt_embedding:
+            if not hasattr(job, 'title_embedding') or not job.title_embedding:
+                job.title_embedding = model.encode(job.title).tolist()
+            prompt_similarity = calculate_similarity(prompt_embedding, job.title_embedding)
+        
+        # Calculate skill overlap
+        resume_skills = set(parsed_resume.get('skills', []))
+        job_skills = set(parsed_job.get('skills', []))
+        skill_overlap = len(resume_skills.intersection(job_skills)) / max(len(job_skills), 1)
+        
+        # Calculate experience level match
+        resume_exp = parsed_resume.get('experience_level', 'not specified')
+        job_exp = parsed_job.get('experience_level', 'not specified')
+        exp_match = 1.0 if resume_exp == job_exp else 0.0
+        
+        # Calculate overall score with weights
+        weights = {
+            'resume_similarity': 0.5,
+            'prompt_similarity': 0.2,
+            'skill_overlap': 0.2,
+            'experience_match': 0.1
+        }
+        
+        overall_score = (
+            resume_similarity * weights['resume_similarity'] +
+            prompt_similarity * weights['prompt_similarity'] +
+            skill_overlap * weights['skill_overlap'] +
+            exp_match * weights['experience_match']
+        )
+        
+        # Skip jobs that don't meet the minimum score threshold
+        if overall_score < filter_params.get('role_relevance_threshold', 0.0):
+            continue
             
-        job_desc_encoded = model.encode(preprocessed_job_desc)
-        job_title_encoded = model.encode(preprocessed_job_title)
-
-        resume_similarity = cosine_similarity(resume_encoded.reshape(1, -1), job_desc_encoded.reshape(1, -1))[0][0]
-        prompt_similarity = cosine_similarity(prompt_encoded.reshape(1, -1), job_desc_encoded.reshape(1, -1))[0][0] if prompt_encoded is not None else 0.0
+        # Create a JobScore object to store the job and its scores
+        job_score = JobScore(
+            job=job,
+            score=overall_score,
+            resume_similarity=resume_similarity,
+            prompt_similarity=prompt_similarity,
+            skill_overlap=skill_overlap,
+            experience_match=exp_match
+        )
+        
+        # Apply salary filters if salary is available
+        if hasattr(job, 'salary') and job.salary is not None:
+            if job.salary < filter_params.get('min_salary', 0):
+                continue
+            if job.salary > filter_params.get('max_salary', float('inf')):
+                continue
+        
+        # Use a min-heap to efficiently keep track of top k jobs
+        # We store negative scores since Python's heapq is a min-heap
+        if len(top_k_heap) < k:
+            heapq.heappush(top_k_heap, (overall_score, job_score))
+        else:
+            # If current job is better than the worst in heap, replace it
+            if overall_score > top_k_heap[0][0]:
+                heapq.heappop(top_k_heap)
+                heapq.heappush(top_k_heap, (overall_score, job_score))
 
         # Non-linear boost for prompt similarity if it exceeds the threshold
-        if prompt_encoded is not None and prompt_similarity > filter['prompt_boost_threshold']:
-            prompt_similarity *= filter['prompt_boost_factor']
+        if prompt_embedding is not None and prompt_similarity > filter_params['prompt_boost_threshold']:
+            prompt_similarity *= filter_params['prompt_boost_factor']
             prompt_similarity = min(prompt_similarity, 1.0)
 
         # Calculate skill overlap as the Jaccard similarity between the skills in the resume and job description
@@ -292,47 +233,73 @@ async def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt:
             experience_diff = abs(resume_experience_level - job_experience_level)
             experience_match = 1 - math.log2(1 + experience_diff) / math.log2(1 + MAX_EXPERIENCE_DIFF)
 
-        # Calculate the job description match score
+        # Calculate the job description match score (same as resume similarity)
         job_description_match = resume_similarity
-    
-        # Role relevance penalty: comparing job title to resume and the search prompt
-        role_relevance = 1.0
-        if prompt_encoded is not None:
-            title_prompt_similarity = cosine_similarity(prompt_encoded.reshape(1, -1), job_title_encoded.reshape(1, -1))[0][0]
-            if title_prompt_similarity < filter['role_relevance_threshold']:
-                role_relevance -= (1.0 - title_prompt_similarity) * filter['role_relevance_boost_factor']
-                role_relevance = max(role_relevance, 0.0)  # Ensure it doesn't go negative
         
-        # Do the same thing above for resume
-        title_resume_similarity = cosine_similarity(resume_encoded.reshape(1, -1), job_title_encoded.reshape(1, -1))[0][0]
-        if title_resume_similarity < filter['role_relevance_threshold']:
-            role_relevance -= (1.0 - title_resume_similarity) * filter['role_relevance_boost_factor']
-            role_relevance = max(role_relevance, 0.0)  # Ensure it doesn't go negative
-
-        # Calculate the proximity score if location is provided
-        user_coordinates = await get_location_coordinates(parsed_resume.get('location', ''))
-        job_coordinates = await get_location_coordinates(job.location) if job.location else None
-        proximity_score = compute_proximity_score(user_coordinates, job_coordinates) if user_coordinates and job_coordinates else 0.3
-
-        score = (
-            weights['resume_match'] * resume_similarity + 
-            weights['prompt_match'] * prompt_similarity +
-            weights['skill_overlap'] * skill_overlap +
-            weights['experience_match'] * experience_match + 
-            weights['job_description_match'] * job_description_match + 
-            weights['proximity_score'] * proximity_score
-        )
-
-        # Apply the role relevance penalty
-        score *= role_relevance
-
-        # Apply the minimum overall score filter
-        if score < filter['min_overall_score']:
+        # Default proximity score (will be overridden if location is available)
+        proximity_score = 0.3
+        
+        # Try to get location-based proximity score if location is available
+        try:
+            if hasattr(job, 'location') and job.location:
+                user_coordinates = await get_location_coordinates(parsed_resume.get('location', ''))
+                job_coordinates = await get_location_coordinates(job.location)
+                if user_coordinates and job_coordinates:
+                    proximity_score = compute_proximity_score(user_coordinates, job_coordinates)
+        except Exception as e:
+            print(f"Error calculating proximity score: {e}")
+        
+        # Calculate the final score using the weights from filter_params
+        try:
+            # Role relevance penalty: comparing job title to resume and the search prompt
+            role_relevance = 1.0
+            
+            # Check title-prompt similarity if possible
+            if prompt_embedding is not None and hasattr(job, 'title_embedding') and job.title_embedding is not None:
+                title_prompt_similarity = calculate_similarity(prompt_embedding, job.title_embedding)
+                if title_prompt_similarity < filter_params['role_relevance_threshold']:
+                    role_relevance -= (1.0 - title_prompt_similarity) * filter_params['role_relevance_boost_factor']
+                    role_relevance = max(role_relevance, 0.0)  # Ensure it doesn't go negative
+            
+            # Check title-resume similarity if possible
+            if hasattr(job, 'title_embedding') and job.title_embedding is not None and resume_embedding is not None:
+                title_resume_similarity = calculate_similarity(resume_embedding, job.title_embedding)
+                if title_resume_similarity < filter_params['role_relevance_threshold']:
+                    role_relevance -= (1.0 - title_resume_similarity) * filter_params['role_relevance_boost_factor']
+                    role_relevance = max(role_relevance, 0.0)  # Ensure it doesn't go negative
+            
+            # Calculate the base score using the weights from filter_params
+            weights = filter_params.get('weights', {})
+            base_score = (
+                weights.get('resume_match', 0.4) * resume_similarity + 
+                weights.get('prompt_match', 0.3) * prompt_similarity +
+                weights.get('skill_overlap', 0.2) * skill_overlap +
+                weights.get('experience_match', 0.1) * experience_match + 
+                weights.get('job_description_match', 0.4) * job_description_match + 
+                weights.get('proximity_score', 0.3) * proximity_score
+            )
+            
+            # Apply the role relevance penalty
+            score = base_score * role_relevance
+            score = float(score)
+            
+            # Apply the minimum overall score filter
+            if score < filter_params.get('min_overall_score', 0.0):
+                continue
+                
+        except Exception as e:
+            print(f"Error calculating job score: {e}")
+            # If there's an error in score calculation, skip this job
             continue
 
-        job_with_score = job.model_copy(update={'score': score})
-        ranked_jobs_list.append(job_with_score)
-
-    # Sorts the jobs in a decreasing order of score
-    ranked_jobs_list.sort(key=lambda x: x.score, reverse=True)
-    return ranked_jobs_list
+    # Convert the heap to a sorted list in descending order
+    sorted_job_scores = []
+    while top_k_heap:
+        score, job_score = heapq.heappop(top_k_heap)
+        sorted_job_scores.append((job_score, score))
+    
+    # Sort by score in descending order
+    sorted_job_scores.sort(key=lambda x: x[1], reverse=True)
+    
+    # Extract just the jobs in order of their scores
+    return [job_score.job for job_score, _ in sorted_job_scores]
