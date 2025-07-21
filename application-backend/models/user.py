@@ -3,6 +3,8 @@ from typing import Optional, List
 from bson import ObjectId
 import uuid
 
+
+
 class User(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
     email: str

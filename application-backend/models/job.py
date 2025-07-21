@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List, Any
-from datetime import datetime
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer
+from typing import Optional, List, Any, Union, Dict, Any
 import uuid
+from bson import ObjectId
+from datetime import datetime
+import json
 
 class Job(BaseModel):
     """
@@ -19,10 +21,24 @@ class Job(BaseModel):
     title_embedding: Optional[List[float]] = Field(None, description="Embedding for the job title.")
     source_url: str = Field(..., description="The original URL where the job listing was found.")
     user_id: Optional[str] = Field(None, description="The ID of the user who created the job listing.")
+    @field_validator('user_id', mode='before')
+    @classmethod
+    def convert_user_id_to_string(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, ObjectId):
+            return str(v)
+        return v
     
     class Config:
         # This allows us to use `_id` as the field name in MongoDB but `id` in our Pydantic model
         populate_by_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {
+            ObjectId: lambda v: str(v) if v else None
+        }
+    
+
     
     def update_embeddings(self, model: Any) -> None:
         """Update both title and description embeddings using the provided model."""

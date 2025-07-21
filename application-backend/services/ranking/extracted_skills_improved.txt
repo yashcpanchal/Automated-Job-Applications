@@ -94,6 +94,7 @@ Automation
 Shell Scripting
 Powershell
 Go
+GoLang
 Rust
 Kotlin
 Swift
@@ -4328,3 +4329,4 @@ Document Collaboration (Global)
 File Sharing (Global)
 Knowledge Management (Global)
 Information Sharing (Global)
+SaaS Application Development

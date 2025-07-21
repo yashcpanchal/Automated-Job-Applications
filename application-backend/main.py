@@ -5,17 +5,28 @@ from typing import Any
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from routers import auth, pdf, jobs
+from routers import auth, pdf, jobs, task
 from core.config import MONGODB_URI, JSEARCH_API_KEY
 from dependencies.database import get_mongo_client
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Suppress debug logs for specific libraries
+logging.getLogger('motor').setLevel(logging.WARNING)
+logging.getLogger('pymongo').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('pdfminer').setLevel(logging.WARNING)
+logging.getLogger('pdfminer.psparser').setLevel(logging.WARNING)
+logging.getLogger('pdfminer.pdfdocument').setLevel(logging.WARNING)
+logging.getLogger('pdfminer.pdfpage').setLevel(logging.WARNING)
+logging.getLogger('pdfminer.pdfinterp').setLevel(logging.WARNING)
 
 # Custom JSON encoder
 def custom_json_encoder(obj: Any) -> Any:
@@ -56,6 +67,17 @@ app = FastAPI(
     ]
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*", "Authorization"],
+)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -69,8 +91,10 @@ async def lifespan(app: FastAPI):
 # app.include_router(job.router)
 # app.include_router(user.router)
 # app.include_router(apply.router)
-app.include_router(pdf.router)
-app.include_router(jobs.router)
+app.include_router(pdf.router, prefix="/api")
+app.include_router(jobs.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(task.router, prefix="/api")
 
 
 
