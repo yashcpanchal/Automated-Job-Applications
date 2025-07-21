@@ -325,6 +325,7 @@ async def rank_and_filter_jobs(jobs: List[Job], resume_text: str, search_prompt:
 
         # Apply the role relevance penalty
         score *= role_relevance
+        score = float(score)
 
         # Apply the minimum overall score filter
         if score < filter['min_overall_score']:

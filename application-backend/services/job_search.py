@@ -3,10 +3,7 @@ import json
 import time
 import asyncio
 
-
 # Langchain and Langgraph imports
-from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain_core.messages import BaseMessage, SystemMessage
 from typing import List
 import json
 # Langgraph imports
@@ -22,6 +19,7 @@ from services.agent_nodes.web_search import find_urls_node
 from services.agent_nodes.page_processing import fetch_page_text_node, extract_job_details_node
 from services.agent_nodes.classify_page import classify_page_node
 from services.agent_nodes.process_match import process_and_match_node
+from services.agent_nodes.extract_urls import extract_urls_node
 from services.utils.playwright_manager import PlaywrightManager
 
 # --- Router Functions ---
@@ -44,10 +42,13 @@ def should_extract_router(state: AgentState) -> str:
     print("--- ROUTER: SHOULD EXTRACT? ---")
     classification = state.get("current_page_classification", "IRRELEVANT")
     if classification == "JOB_DESCRIPTION":
-        print("  -> Decision: YES, page is a job description.")
+        print("  -> Decision: page is a job DESCRIPTION.")
         return "extract_details"
+    elif classification == "JOB_BOARD":
+        print(print("  -> Decision: page is a job BOARD."))
+        return "extract_urls"
     else:
-        print("  -> Decision: NO, page is a job board or irrelevant.")
+        print("  -> Decision: page is IRRELEVANT.")
         return "skip_extraction"
 
 # --- Node Functions ---
@@ -79,6 +80,7 @@ class JobSearchService:
         workflow.add_node("fetch_page_text", fetch_page_text_node)
         workflow.add_node("classify_page", classify_page_node)
         workflow.add_node("extract_job_details", extract_job_details_node)
+        workflow.add_node("extract_urls", extract_urls_node)
         workflow.add_node("increment_index", increment_index_node)
         workflow.add_node("process_and_match", process_and_match_node)
 
@@ -100,11 +102,12 @@ class JobSearchService:
         workflow.add_conditional_edges(
             "classify_page",
             should_extract_router,
-            {"extract_details": "extract_job_details", "skip_extraction": "increment_index"}
+            {"extract_details": "extract_job_details", "extract_urls": "extract_urls", "skip_extraction": "increment_index"}
         )
 
         # After extraction, we increment the index
         workflow.add_edge("extract_job_details", "increment_index")
+        workflow.add_edge("extract_urls", "increment_index")
         
         # After incrementing the index, loop back to the main decision router
         workflow.add_conditional_edges(

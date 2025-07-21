@@ -15,7 +15,7 @@ class AgentState(TypedDict):
     search_queries: List[str]
     
     # List of urls to process
-    urls_to_process: List[str] 
+    urls_to_process: Annotated[List[str], operator.add] 
     
     # Running list of extracted jobs
     extracted_jobs: Annotated[List[Job], operator.add]

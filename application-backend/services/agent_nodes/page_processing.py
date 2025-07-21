@@ -6,6 +6,7 @@ import time
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from services.agent_nodes.extract_urls import extract_clean_text
 from models.job import Job
 from core.config import GOOGLE_API_KEY
 
@@ -33,7 +34,7 @@ async def fetch_page_text_node(state: dict) -> dict:
     
     try:
         # Use the single, persistent page to navigate to the new URL
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=10000)
         
         # Get the page's content after JavaScript has potentially run
         html_content = await page.content()
@@ -42,6 +43,9 @@ async def fetch_page_text_node(state: dict) -> dict:
         
         soup = BeautifulSoup(html_content, "html.parser")
         page_text = soup.get_text(separator=' ', strip=True)
+                
+        # page_text = await extract_clean_text(page)
+
         
         return {"current_page_text": page_text, "current_url": url, "loop_start_time": start_time}
     
@@ -55,7 +59,9 @@ async def extract_job_details_node(state: dict) -> dict:
     contain the scraped page text.
     """
     print("--- NODE: EXTRACTING JOB DETAILS ---")
-    page_text = state.get("current_page_text", "")
+    # page_text = state.get("current_page_text", "")
+    page = state.get("page", None)
+    page_text = await extract_clean_text(page)
     url = state.get("current_url", "")
 
     if not page_text:
