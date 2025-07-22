@@ -10,7 +10,7 @@ class Job(BaseModel):
     Represents a single job listing which will be retrieved by the AI search agent.
     Will be stored in the 'job-data-collection' in the mongodb
     """
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="_id")
+    id: str
     title: str = Field(..., description="Official title of the job (e.g., 'intern')")
     company: str = Field(..., description="Name of the company hiring for this position")
     location: Optional[str] = Field(None, description="The physical location of the job (e.g., 'San Francisco, CA').")

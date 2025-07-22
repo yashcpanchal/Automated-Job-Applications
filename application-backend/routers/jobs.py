@@ -1,5 +1,5 @@
 # jobs.py
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, status
 from pydantic import BaseModel, Field
 from services.job_search import JobSearchService
 from typing import List, Dict, Any, Optional
@@ -13,6 +13,8 @@ import redis.asyncio as aioredis
 import json
 import logging
 from routers.auth import UserInDB, get_current_user # Corrected import based on auth.py structure
+from bson import ObjectId
+
 
 router = APIRouter(
     prefix="/jobs",
@@ -145,6 +147,36 @@ def sanitize_for_json(obj):
     except Exception:
         return "[unserializable object]"
 
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job(
+    job_id: str, 
+    db = Depends(get_database),
+    current_user: UserInDB = Depends(get_current_user)
+):
+    """
+    Delete a job by its ID for user if they are not interested in the job anymore.
+    """
+    try:
+        job_object_id = ObjectId(job_id)
+
+        user_id_str = str(current_user.id)
+
+        delete_result = await db.jobs.delete_one({
+            "_id": job_object_id,
+            "user_id": user_id_str 
+        })
+        if delete_result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Job not found or not owned by user.")
+    
+        return {}
+    except Exception as e:
+        error_detail = str(e)
+        logging.error(f"Error deleting job {job_id}: {error_detail}", exc_info=True)
+        raise HTTPException(status_code=500, detail=error_detail)
+
+
+
+
 @router.post("/agent-search", response_model=JobSearchStatus)
 async def agent_search(
     request: JobSearchRequest,
@@ -273,7 +305,7 @@ def convert_mongo_doc(doc):
     doc_dict = dict(doc)
     # Convert ObjectId to string
     if '_id' in doc_dict:
-        doc_dict['_id'] = str(doc_dict['_id'])
+        doc_dict['id'] = str(doc_dict['_id'])
     return doc_dict
 
 @router.get("/matched-jobs", response_model=PaginatedResponse)
