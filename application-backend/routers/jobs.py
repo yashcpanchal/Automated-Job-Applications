@@ -216,7 +216,10 @@ async def agent_search(
             jobs_to_save = []
             for job in final_jobs:
                 job_dict = job.model_dump()
-                job_dict["user_id"] = user_id_for_task # <--- Use the correct user ID string
+                job_dict["user_id"] = user_id_for_task
+                job_dict["task_id"] = task_id  # Associate the job with the task ID
+                job_dict["search_prompt_used"] = search_prompt  # Store the search prompt used
+                job_dict["resume_text_hash"] = hash(resume_text)  # Store a hash of the resume text for reference
                 # Ensure all values are JSON serializable
                 job_dict = {k: sanitize_for_json(v) for k, v in job_dict.items()}
                 jobs_to_save.append(job_dict)
@@ -278,17 +281,23 @@ async def get_matched_jobs(
     db = Depends(get_database),
     page: int = 1,
     page_size: int = 10,
-    current_user: UserInDB = Depends(get_current_user) # Get user_id from authenticated user
+    current_user: UserInDB = Depends(get_current_user), # Get user_id from authenticated user
+    task_id: Optional[str] = None # Optional task_id
 ):
     """
     Endpoint to retrieve matched jobs for the authenticated user.
     """
     try:
         user_id_str = str(current_user.id) # Use the ID from the authenticated user
+
+        query = {"user_id": user_id_str}
+        if task_id:
+            query["task_id"] = task_id  # Filter by task_id if provided
+
         skip = (page - 1) * page_size
-        total = await db.jobs.count_documents({"user_id": user_id_str}) # Filter by authenticated user's ID
+        total = await db.jobs.count_documents(query) # Filter by authenticated user's ID
         
-        cursor = db.jobs.find({"user_id": user_id_str}).skip(skip).limit(page_size)
+        cursor = db.jobs.find(query).skip(skip).limit(page_size)
         jobs = []
         async for job in cursor:
             jobs.append(convert_mongo_doc(job))
