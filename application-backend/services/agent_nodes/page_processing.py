@@ -46,7 +46,6 @@ async def fetch_page_text_node(state: dict) -> dict:
                 
         # page_text = await extract_clean_text(page)
 
-        
         return {"current_page_text": page_text, "current_url": url, "loop_start_time": start_time}
     
     except Exception as e:

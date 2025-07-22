@@ -22,6 +22,7 @@ from services.agent_nodes.page_processing import fetch_page_text_node, extract_j
 from services.agent_nodes.classify_page import classify_page_node
 from services.agent_nodes.process_match import process_and_match_node
 from services.agent_nodes.extract_urls import extract_urls_node
+from services.agent_nodes.filter_urls import filter_urls_node
 from services.utils.playwright_manager import PlaywrightManager
 
 # --- Router Functions ---
@@ -83,6 +84,7 @@ class JobSearchService:
         workflow.add_node("classify_page", classify_page_node)
         workflow.add_node("extract_job_details", extract_job_details_node)
         workflow.add_node("extract_urls", extract_urls_node)
+        workflow.add_node("filter_urls", filter_urls_node)
         workflow.add_node("increment_index", increment_index_node)
         workflow.add_node("process_and_match", process_and_match_node)
 
@@ -109,7 +111,8 @@ class JobSearchService:
 
         # After extraction, we increment the index
         workflow.add_edge("extract_job_details", "increment_index")
-        workflow.add_edge("extract_urls", "increment_index")
+        workflow.add_edge("extract_urls", "filter_urls") # Modified edge
+        workflow.add_edge("filter_urls", "increment_index") # New edge
         
         # After incrementing the index, loop back to the main decision router
         workflow.add_conditional_edges(
