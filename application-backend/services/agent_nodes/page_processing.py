@@ -14,10 +14,14 @@ async def fetch_page_text_node(state: dict) -> dict:
     """
     Fetches the text content of the current URL being processed.
     """
-    print("--- NODE: FETCHING PAGE TEXT ---")
+    # print("--- NODE: FETCHING PAGE TEXT ---")
 
     start_time = time.time()
-    urls = state.get("urls_to_process", [])
+    if not state.get("is_on_extracted_jb_urls", False):
+        urls = state.get("urls_to_process", [])
+    else:
+        urls = state.get("urls_extracted_job_boards", [])
+
     index = state.get("url_index", 0)
 
     # Get the current URL using the index
@@ -26,7 +30,7 @@ async def fetch_page_text_node(state: dict) -> dict:
         return {"current_page_text": "", "current_url": "", "loop_start_time": start_time}
 
     url = urls[index]
-    print(f"  -> Fetching: {url}")
+    # print(f"  -> Fetching: {url}")
 
     page = state.get('page')
     if not page:
@@ -34,7 +38,7 @@ async def fetch_page_text_node(state: dict) -> dict:
     
     try:
         # Use the single, persistent page to navigate to the new URL
-        await page.goto(url, wait_until="domcontentloaded", timeout=10000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         
         # Get the page's content after JavaScript has potentially run
         html_content = await page.content()
@@ -57,7 +61,7 @@ async def extract_job_details_node(state: dict) -> dict:
     Extracts structured job information from the page text using an LLM. State inputted should
     contain the scraped page text.
     """
-    print("--- NODE: EXTRACTING JOB DETAILS ---")
+    # print("--- NODE: EXTRACTING JOB DETAILS ---")
     # page_text = state.get("current_page_text", "")
     page = state.get("page", None)
     page_text = await extract_clean_text(page)
@@ -68,7 +72,7 @@ async def extract_job_details_node(state: dict) -> dict:
         return {}
     
     # Another agent to parse through the search results retrieved by the search api and format them properly
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", google_api_key=GOOGLE_API_KEY)
     # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", google_api_key=GOOGLE_API_KEY)
     structured_llm = llm.with_structured_output(Job, include_raw=False)
     
@@ -85,7 +89,7 @@ async def extract_job_details_node(state: dict) -> dict:
         extracted_data = await extraction_chain.ainvoke({"page_text": page_text})
         if extracted_data:
             extracted_data.source_url = url
-            print(f"  -> SUCCESS: Extracted '{extracted_data.title}'")
+            print(f"  -> SUCCESS: Extracted '{extracted_data.title}' from {extracted_data.company}")
             # Return a list containing the new job to be appended to the main list
             return {"extracted_jobs": [extracted_data]}
     except Exception as e:

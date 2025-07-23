@@ -2,6 +2,12 @@ from typing import Optional
 from urllib.parse import urlparse, urljoin
 from playwright.async_api import Page
 import re
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
+from models.agent_models.url_classification import FilteredUrls
+from core.config import GOOGLE_API_KEY
+from typing import List
+
 
 async def extract_clean_text(page: Page) -> str:
     """
@@ -72,9 +78,6 @@ async def extract_urls_node(state: dict) -> dict:
 
     all_links_locators = await page.locator('a[href]').all()
     
-    print(f"--- EXTRACTED {len(all_links_locators)} LINKS from: {page.url} ---")
-
-
     count = 0
     for link_locator in all_links_locators:
         href = await link_locator.get_attribute('href')
@@ -94,7 +97,7 @@ async def extract_urls_node(state: dict) -> dict:
         lower_absolute_url = absolute_url.lower()
         lower_url = stripped_url.lower()
 
-        # --- Filtering Logic ---
+        # --- Basic Filtering Logic ---
         has_positive_keyword = any(keyword in lower_url for keyword in positive_keywords_url)
         has_positive_root = any(keyword in lower_absolute_url for keyword in positive_root_keywords)
         has_negative_keyword = any(keyword in lower_url for keyword in negative_keywords_url)
@@ -104,12 +107,86 @@ async def extract_urls_node(state: dict) -> dict:
         if (has_positive_root or has_positive_keyword or has_job_pattern) and not (has_negative_keyword or has_negative_root):
             job_links.add(absolute_url)
 
+    root = urlparse(base_url)
+    if "github" not in root:  
+        filtered_links = await filter_urls(list(job_links))
+    else:
+        filtered_links = list(job_links)
+
     # --- Step 4: Filter and Return Results ---
-    final_links = list(job_links)
+    print(f"--- EXTRACTED {len(all_links_locators)} LINKS from: {page.url} and added {len(filtered_links)} JOBS ---")
+    # print(f"ADDED JOBS:")
+    # for i in range(len(filtered_links)):
+    #     print(f"--> {i}. {filtered_links[i]}")  
+    current_urls = set(state.get("urls_to_process", []))
+    current_extracted_job_board_urls = set(state.get("urls_extracted_job_boards", []))
+    final_links = [link for link in filtered_links if link not in current_urls and link not in current_extracted_job_board_urls]
+    return {"urls_extracted_job_boards": final_links}
 
-    print(f"ADDED JOBS:")
-    for i in range(len(final_links)):
-        print(f"--> {i}. {final_links[i]}")    
-    return {"urls_to_process": final_links}
+async def filter_urls(urls_to_filter: List[str]) -> List[str]:
+    """
+    Uses a Gemini model to filter a list of URLs, returning only those
+    that are likely to be direct job postings.
+    """
+    # print("--- NODE: FILTERING URLS ---")
 
+    if not urls_to_filter:
+        # print("  -> Skipping filtering: No URLs to process.")
+        return {"urls_to_process": []}
 
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY, temperature=0)
+    structured_llm = llm.with_structured_output(FilteredUrls)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a highly specialized AI assistant for parsing web URLs to identify and extract direct links to individual job postings. Your execution must be flawless.
+        Your primary objective is to analyze a provided list of URLs and extract ONLY the ones that lead directly to a page for a SINGLE job description.
+
+        **CRITICAL RULES:**
+
+        1.  **THE 50 URL LIMIT:** You MUST NOT return more than 50 URLs. If you identify more than 50 valid URLs, return only the first 50.
+        2.  **THE "ONE JOB" RULE:** The most important rule is that a valid URL must point to a page describing a *single* job, not a list of multiple jobs.
+        3.  **STRICTLY EXCLUDE:** You must discard any URL that is a general careers page, a list of jobs, a search results page, a company homepage, a blog post, or a login page.
+
+        **ANALYSIS PROCESS:**
+
+        * **Positive Indicators (Look for these):**
+            * Keywords like `job`, `posting`, `vacancy`, `opening`, `apply`.
+            * Recruiting platform domains like `greenhouse.io`, `lever.co`, `workday.com`.
+            * URL paths that contain specific job identifiers (e.g., numerical IDs, UUIDs, or job titles), such as `/jobs/123456` or `?gh_jid=4815162342`.
+
+        * **Negative Indicators (Immediately discard these):**
+            * Generic paths like `/careers`, `/jobs`, `/opportunities`. These are almost always lists.
+            * Search query parameters like `?q=engineer` or `/search`.
+            * URLs that end in the plain company domain (e.g., `https://company.com/`).
+
+        **EXAMPLES:**
+
+        * **GOOD (Include):** `https://boards.greenhouse.io/stripe/jobs/4169621`
+            * *Reason: Contains a platform domain, `/jobs/`, and a specific ID.*
+        * **GOOD (Include):** `https://www.notion.so/careers/product-designer-48a68b8a83444158bb9150644235c43c`
+            * *Reason: Contains `/careers/` followed by a specific job title and a unique ID.*
+        * **BAD (Exclude):** `https://stripe.com/jobs`
+            * *Reason: This is a general list of jobs, not a specific posting.*
+        * **BAD (Exclude):** `https://www.google.com/careers/search?q=software`
+            * *Reason: This is a search results page.*
+        * **BAD (Exclude):** `https://www.apple.com/careers/us/`
+            * *Reason: This is a regional careers portal, not a specific job.*
+
+        **Final Output:**
+        Return ONLY a plain list of the valid URLs. Do not add any commentary, explanations, or numbering. If no URLs meet the criteria, return nothing."""),
+        ("user", "Please filter the following URLs:\n\n<urls>\n{url_list}\n</urls>")
+    ])
+
+    chain = prompt | structured_llm
+
+    try:
+        # Join the list of URLs into a single string for the prompt
+        url_list_str = "\n".join(urls_to_filter)
+        result = await chain.ainvoke({"url_list": url_list_str})
+        filtered_urls = list(result.job_urls)
+        # print(f"  -> Original URLs: {len(urls_to_filter)}, Filtered URLs: {len(filtered_urls)}")
+        return filtered_urls
+    except Exception as e:
+        print(f"  -> Error during URL filtering: {e}")
+        # In case of an error, return the original list to avoid breaking the flow
+        return []

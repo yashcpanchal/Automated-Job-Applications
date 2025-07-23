@@ -4,8 +4,6 @@ import time
 import asyncio
 
 # Langchain and Langgraph imports
-from pydantic import BaseModel, Field
-from langchain_core.messages import BaseMessage, SystemMessage
 from typing import List
 import json
 # Langgraph imports
@@ -22,36 +20,44 @@ from services.agent_nodes.page_processing import fetch_page_text_node, extract_j
 from services.agent_nodes.classify_page import classify_page_node
 from services.agent_nodes.process_match import process_and_match_node
 from services.agent_nodes.extract_urls import extract_urls_node
-from services.agent_nodes.filter_urls import filter_urls_node
 from services.utils.playwright_manager import PlaywrightManager
 
 # --- Router Functions ---
 
-def should_continue_router(state: AgentState) -> str:
+def loop_control_router(state: AgentState) -> str:
     """Router that decides if there are more URLs to process."""
-    print("--- ROUTER: SHOULD CONTINUE? ---")
-    urls = state.get("urls_to_process", [])
+    # print("--- ROUTER: SHOULD CONTINUE? ---")
     index = state.get("url_index", 0)
-    
+
+    if state.get("is_on_extracted_jb_urls", False):
+        urls = state.get("urls_extracted_job_boards", [])
+    else:
+        urls = state.get("urls_to_process", [])
+
     if index >= len(urls):
-        print("  -> Decision: NO, processed all URLs. Finishing.")
+        # print("  -> Decision: NO, processed all URLs???.")
         return "finish_processing"
     else:
-        print(f"  -> Decision: YES, processing URL {index + 1} of {len(urls)}.")
+        print(f"Processing URL {index + 1} of {len(urls)}.")
         return "continue_processing"
 
 def should_extract_router(state: AgentState) -> str:
     """The 'gatekeeper' router."""
-    print("--- ROUTER: SHOULD EXTRACT? ---")
+    # print("--- ROUTER: SHOULD EXTRACT? ---")
     classification = state.get("current_page_classification", "IRRELEVANT")
+    page = state.get("page", None)
+    if page:
+        url = page.url
+    else:
+        url = "NO PAGE"
     if classification == "JOB_DESCRIPTION":
-        print("  -> Decision: page is a job DESCRIPTION.")
+        print(f"  -> Decision: {url} is a job DESCRIPTION.")
         return "extract_details"
     elif classification == "JOB_BOARD":
-        print(print("  -> Decision: page is a job BOARD."))
+        print(print(f"  -> Decision: {url} is a job BOARD."))
         return "extract_urls"
     else:
-        print("  -> Decision: page is IRRELEVANT.")
+        print(f"  -> Decision: {url} is IRRELEVANT.")
         return "skip_extraction"
 
 # --- Node Functions ---
@@ -59,16 +65,27 @@ def should_extract_router(state: AgentState) -> str:
 async def increment_index_node(state: AgentState) -> dict:
     """Increments the URL index and appends any newly extracted job to the list.
     Also pauses dynamically to prevent hitting the rate limit."""
-    TARGET_SECONDS_PER_REQUEST = 2.0  # (60 seconds / 30 requests)
+    TARGET_SECONDS_PER_REQUEST = 5.0  # (60 seconds / 30 requests)
     start_time = state.get("loop_start_time", time.time())
     time_elapsed = time.time() - start_time
     sleep_duration = max(0, TARGET_SECONDS_PER_REQUEST - time_elapsed)
 
     if sleep_duration > 0:
-        print(f"  -> Throttling: sleeping for {sleep_duration:.2f} seconds.")
+        # print(f"  -> Throttling: sleeping for {sleep_duration:.2f} seconds.")
         await asyncio.sleep(sleep_duration)
 
     index = state.get("url_index", 0)
+    is_on_extracted_jb_urls = state.get("is_on_extracted_jb_urls", False)
+    if not is_on_extracted_jb_urls:
+        urls = state.get("urls_to_process", [])
+        if index + 1 >= len(urls):
+            # if at the end of the urls_to_process
+            # Reset the index and switch job lists
+            print("---> SWITCHING TO JB EXTRACTED URLS ---")
+            return {"url_index": 0, "is_on_extracted_jb_urls": True}
+        return {"url_index": index + 1}
+    # In the case that we reach the end of the extracted job urls 
+    # we should just increment and let the router take care of it
     return {
         "url_index": index + 1
     }
@@ -84,7 +101,6 @@ class JobSearchService:
         workflow.add_node("classify_page", classify_page_node)
         workflow.add_node("extract_job_details", extract_job_details_node)
         workflow.add_node("extract_urls", extract_urls_node)
-        workflow.add_node("filter_urls", filter_urls_node)
         workflow.add_node("increment_index", increment_index_node)
         workflow.add_node("process_and_match", process_and_match_node)
 
@@ -95,7 +111,7 @@ class JobSearchService:
         # After finding URLs, go directly to the decision router.
         workflow.add_conditional_edges(
             "find_urls",
-            should_continue_router,
+            loop_control_router,
             {"continue_processing": "fetch_page_text", "finish_processing": "process_and_match"}
         )
         
@@ -109,15 +125,16 @@ class JobSearchService:
             {"extract_details": "extract_job_details", "extract_urls": "extract_urls", "skip_extraction": "increment_index"}
         )
 
-        # After extraction, we increment the index
         workflow.add_edge("extract_job_details", "increment_index")
-        workflow.add_edge("extract_urls", "filter_urls") # Modified edge
-        workflow.add_edge("filter_urls", "increment_index") # New edge
+
+        # Add conditional router from extract urls to increment_index/filter_urls
+
+        workflow.add_edge("extract_urls", "increment_index")
         
         # After incrementing the index, loop back to the main decision router
         workflow.add_conditional_edges(
             "increment_index",
-            should_continue_router,
+            loop_control_router,
             {"continue_processing": "fetch_page_text", "finish_processing": "process_and_match"}
         )
 
@@ -145,7 +162,7 @@ class JobSearchService:
         print("✅ --- AGENTIC JOB SEARCH COMPLETE --- ✅\n")
         if final_jobs:
             final_jobs_as_dicts = [job.model_dump() for job in final_jobs]
-            print(f"FINAL RESULTS:\n {json.dumps(final_jobs_as_dicts, indent=2)}")
+            # print(f"FINAL RESULTS:\n {json.dumps(final_jobs_as_dicts, indent=2)}")
         else:
             print("No jobs were found or extracted successfully.")
         
