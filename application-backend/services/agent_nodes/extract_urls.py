@@ -108,7 +108,7 @@ async def extract_urls_node(state: dict) -> dict:
             job_links.add(absolute_url)
 
     root = urlparse(base_url)
-    if "github" not in root:  
+    if "github" not in root:
         filtered_links = await filter_urls(list(job_links))
     else:
         filtered_links = list(job_links)
@@ -120,7 +120,8 @@ async def extract_urls_node(state: dict) -> dict:
     #     print(f"--> {i}. {filtered_links[i]}")  
     current_urls = set(state.get("urls_to_process", []))
     current_extracted_job_board_urls = set(state.get("urls_extracted_job_boards", []))
-    final_links = [link for link in filtered_links if link not in current_urls and link not in current_extracted_job_board_urls]
+    visited_urls_set = current_urls | current_extracted_job_board_urls
+    final_links = [link for link in filtered_links if link not in visited_urls_set]
     return {"urls_extracted_job_boards": final_links}
 
 async def filter_urls(urls_to_filter: List[str]) -> List[str]:
@@ -128,7 +129,7 @@ async def filter_urls(urls_to_filter: List[str]) -> List[str]:
     Uses a Gemini model to filter a list of URLs, returning only those
     that are likely to be direct job postings.
     """
-    # print("--- NODE: FILTERING URLS ---")
+    print("--- NODE: FILTERING URLS ---")
 
     if not urls_to_filter:
         # print("  -> Skipping filtering: No URLs to process.")
@@ -182,11 +183,14 @@ async def filter_urls(urls_to_filter: List[str]) -> List[str]:
     try:
         # Join the list of URLs into a single string for the prompt
         url_list_str = "\n".join(urls_to_filter)
+        print("Starting Filter")
         result = await chain.ainvoke({"url_list": url_list_str})
+        print("Ending Filter")
         filtered_urls = list(result.job_urls)
         # print(f"  -> Original URLs: {len(urls_to_filter)}, Filtered URLs: {len(filtered_urls)}")
         return filtered_urls
     except Exception as e:
+        print("ERROR")
         print(f"  -> Error during URL filtering: {e}")
         # In case of an error, return the original list to avoid breaking the flow
         return []

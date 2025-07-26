@@ -16,6 +16,7 @@ class AgentState(TypedDict):
     
     # List of urls to process
     urls_to_process: List[str]
+    # List of urls that are extacted from job boards
     urls_extracted_job_boards: Annotated[List[str], operator.add]
     
     # Running list of extracted jobs

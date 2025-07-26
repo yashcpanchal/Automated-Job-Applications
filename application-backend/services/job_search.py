@@ -65,7 +65,7 @@ def should_extract_router(state: AgentState) -> str:
 async def increment_index_node(state: AgentState) -> dict:
     """Increments the URL index and appends any newly extracted job to the list.
     Also pauses dynamically to prevent hitting the rate limit."""
-    TARGET_SECONDS_PER_REQUEST = 5.0  # (60 seconds / 30 requests)
+    TARGET_SECONDS_PER_REQUEST = 8.0  # (60 seconds / 30 requests)
     start_time = state.get("loop_start_time", time.time())
     time_elapsed = time.time() - start_time
     sleep_duration = max(0, TARGET_SECONDS_PER_REQUEST - time_elapsed)
@@ -154,7 +154,7 @@ class JobSearchService:
                 "page": page # Dependency Injection
             }
         
-            final_state = await self.app.ainvoke(initial_state, config={"recursion_limit": 500})
+            final_state = await self.app.ainvoke(initial_state, config={"recursion_limit": 10000})
             
             # Retrieve the list from the 'final_jobs' key, which is set by the last node in the graph.
             final_jobs = final_state.get('final_jobs', [])

@@ -12,3 +12,14 @@ class PageClassification(BaseModel):
         ...,
         description="The classification of the webpage content."
     )
+
+class ExtractedPageClassification(BaseModel):
+    """
+    The classification of the webpage content.
+    - JOB_DESCRIPTION: The page is a detailed description of a single job.
+    - IRRELEVANT: The page is not a job posting (e.g., a blog post, company homepage).
+    """
+    classification: Literal["JOB_DESCRIPTION", "IRRELEVANT"] = Field(
+        ...,
+        description="The classification of the webpage content."
+    )

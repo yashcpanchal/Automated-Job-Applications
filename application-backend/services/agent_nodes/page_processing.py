@@ -72,7 +72,7 @@ async def extract_job_details_node(state: dict) -> dict:
         return {}
     
     # Another agent to parse through the search results retrieved by the search api and format them properly
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", google_api_key=GOOGLE_API_KEY)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", google_api_key=GOOGLE_API_KEY, temperature=0)
     # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", google_api_key=GOOGLE_API_KEY)
     structured_llm = llm.with_structured_output(Job, include_raw=False)
     
