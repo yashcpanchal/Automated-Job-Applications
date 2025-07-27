@@ -1,79 +1,53 @@
 from bs4 import BeautifulSoup
-
 import json
-import time
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
+# Import TimeoutError and Error for specific exception handling
+from playwright.async_api import Page, Error, TimeoutError
 
-from services.agent_nodes.extract_urls import extract_clean_text
 from models.job import Job
 from core.config import GOOGLE_API_KEY
 
-async def fetch_page_text_node(state: dict) -> dict:
+async def fetch_page_text_node(page: Page, url: str) -> str:
     """
-    Fetches the text content of the current URL being processed.
+    Fetches the text content of a URL, with robust error handling for timeouts.
     """
-    # print("--- NODE: FETCHING PAGE TEXT ---")
-
-    start_time = time.time()
-    if not state.get("is_on_extracted_jb_urls", False):
-        urls = state.get("urls_to_process", [])
-    else:
-        urls = state.get("urls_extracted_job_boards", [])
-
-    index = state.get("url_index", 0)
-
-    # Get the current URL using the index
-    if index >= len(urls):
-        print("  -> ERROR: Index out of bounds. Cannot fetch page.")
-        return {"current_page_text": "", "current_url": "", "loop_start_time": start_time}
-
-    url = urls[index]
-    # print(f"  -> Fetching: {url}")
-
-    page = state.get('page')
-    if not page:
-        raise ValueError("Playwright page object not found in state.")
-    
+    print(f"  -> Navigating to: {url}")
     try:
-        # Use the single, persistent page to navigate to the new URL
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # We continue to use 'networkidle' for reliability.
+        await page.goto(url, wait_until="networkidle", timeout=30000)
         
-        # Get the page's content after JavaScript has potentially run
         html_content = await page.content()
-        
-        # Use BeautifulSoup on the final HTML to extract clean text
-        
         soup = BeautifulSoup(html_content, "html.parser")
         page_text = soup.get_text(separator=' ', strip=True)
                 
-        # page_text = await extract_clean_text(page)
-
-        return {"current_page_text": page_text, "current_url": url, "loop_start_time": start_time}
+        print(f"  ✅ Successfully fetched content from: {url}")
+        return page_text
     
+    # Key Change: Catch TimeoutError specifically.
+    except TimeoutError:
+        print(f"  -> Skipping {url}: Navigation timed out after 30 seconds.")
+        return ""
+    # Catch other Playwright-specific errors.
+    except Error as e:
+        print(f"  -> Skipping {url}: Playwright error during navigation - {e.msg}")
+        return ""
+    # A general catch-all for any other unexpected issues.
     except Exception as e:
-        print(f"  -> Skipping {url}: Error during Playwright navigation - {e}")
-        return {"current_page_text": "", "current_url": url, "loop_start_time": start_time}
+        print(f"  -> Skipping {url}: An unexpected error occurred - {e}")
+        return ""
 
-async def extract_job_details_node(state: dict) -> dict:
+async def extract_job_details_node(page_text: str, url: str) -> Job | None:
     """
-    Extracts structured job information from the page text using an LLM. State inputted should
-    contain the scraped page text.
+    Extracts structured job information from the page text using an LLM.
     """
-    # print("--- NODE: EXTRACTING JOB DETAILS ---")
-    # page_text = state.get("current_page_text", "")
-    page = state.get("page", None)
-    page_text = await extract_clean_text(page)
-    url = state.get("current_url", "")
-
     if not page_text:
-        print("  -> Skipping extraction: No page text.")
-        return {}
+        print(f"  -> Skipping extraction for {url}: No page text provided.")
+        return None
     
-    # Another agent to parse through the search results retrieved by the search api and format them properly
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", google_api_key=GOOGLE_API_KEY, temperature=0)
-    # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", google_api_key=GOOGLE_API_KEY)
+    print(f"  -> Extracting job details from: {url}")
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY, temperature=0)
     structured_llm = llm.with_structured_output(Job, include_raw=False)
     
     schema_str = json.dumps(Job.model_json_schema()).replace("{", "{{").replace("}", "}}")
@@ -82,17 +56,15 @@ async def extract_job_details_node(state: dict) -> dict:
         ("user", "Page Text:\n\n{page_text}")
     ])
     
-    # Creating the llm chain using lcel
     extraction_chain = extraction_prompt | structured_llm
 
     try:
         extracted_data = await extraction_chain.ainvoke({"page_text": page_text})
         if extracted_data:
             extracted_data.source_url = url
-            print(f"  -> SUCCESS: Extracted '{extracted_data.title}' from {extracted_data.company}")
-            # Return a list containing the new job to be appended to the main list
-            return {"extracted_jobs": [extracted_data]}
+            print(f"  ✅ SUCCESS: Extracted '{extracted_data.title}' from {extracted_data.company}")
+            return extracted_data
     except Exception as e:
-        print(f"  -> Error during extraction: {e}")
+        print(f"  -> Extraction failed for {url}: {e}")
     
-    return {}
+    return None

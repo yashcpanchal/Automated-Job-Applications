@@ -1,168 +1,125 @@
 from typing import List
 import json
-import time
 import asyncio
 
-# Langchain and Langgraph imports
-from typing import List
-import json
-# Langgraph imports
 from langgraph.graph import StateGraph, END
+from playwright.async_api import Browser
 
-# Models imports
 from models.job import Job
 from models.agent_models.agent_state import AgentState
 
-# Nodes from the agent_nodes subfolder
 from services.agent_nodes.craft_query import craft_query_node
 from services.agent_nodes.web_search import find_urls_node
 from services.agent_nodes.page_processing import fetch_page_text_node, extract_job_details_node
 from services.agent_nodes.classify_page import classify_page_node
 from services.agent_nodes.process_match import process_and_match_node
-from services.agent_nodes.extract_urls import extract_urls_node
 from services.utils.playwright_manager import PlaywrightManager
 
-# --- Router Functions ---
+def should_process_urls_router(state: AgentState) -> str:
+    if state.get("urls_to_process"):
+        return "process_urls"
+    return "finish_processing"
 
-def loop_control_router(state: AgentState) -> str:
-    """Router that decides if there are more URLs to process."""
-    # print("--- ROUTER: SHOULD CONTINUE? ---")
-    index = state.get("url_index", 0)
+async def process_urls_in_parallel(state: AgentState) -> dict:
+    urls_to_process = state['urls_to_process']
+    browser = state.get('browser')
+    if not browser:
+        raise ValueError("Playwright browser object not found in state.")
 
-    if state.get("is_on_extracted_jb_urls", False):
-        urls = state.get("urls_extracted_job_boards", [])
-    else:
-        urls = state.get("urls_to_process", [])
+    print(f"--- NODE: PROCESSING {len(urls_to_process)} URLs IN PARALLEL ---")
+    
+    semaphore = asyncio.Semaphore(10)
 
-    if index >= len(urls):
-        # print("  -> Decision: NO, processed all URLs???.")
-        return "finish_processing"
-    else:
-        print(f"Processing URL {index + 1} of {len(urls)}.")
-        return "continue_processing"
+    async def process_url(url: str, browser: Browser):
+        print(f"🚀 Processing URL: {url}")
+        async with semaphore:
+            context = None
+            try:
+                context = await browser.new_context()
+                page = await context.new_page()
+                
+                page_text = await fetch_page_text_node(page, url)
+                
+                if not page_text:
+                    await context.close()
+                    return None, "IRRELEVANT"
+                
+                classification = await classify_page_node(page_text)
+                await context.close() 
+                return page_text, classification
 
-def should_extract_router(state: AgentState) -> str:
-    """The 'gatekeeper' router."""
-    # print("--- ROUTER: SHOULD EXTRACT? ---")
-    classification = state.get("current_page_classification", "IRRELEVANT")
-    page = state.get("page", None)
-    if page:
-        url = page.url
-    else:
-        url = "NO PAGE"
-    if classification == "JOB_DESCRIPTION":
-        print(f"  -> Decision: {url} is a job DESCRIPTION.")
-        return "extract_details"
-    elif classification == "JOB_BOARD":
-        print(print(f"  -> Decision: {url} is a job BOARD."))
-        return "extract_urls"
-    else:
-        print(f"  -> Decision: {url} is IRRELEVANT.")
-        return "skip_extraction"
+            # Key Change: Made the exception logging more robust.
+            except Exception as e:
+                # This will now safely print any exception that might occur.
+                print(f"  -> Critical error processing {url}: {e!r}")
+                if context:
+                    await context.close()
+                return None, "IRRELEVANT"
 
-# --- Node Functions ---
+    tasks = [process_url(url, browser) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
 
-async def increment_index_node(state: AgentState) -> dict:
-    """Increments the URL index and appends any newly extracted job to the list.
-    Also pauses dynamically to prevent hitting the rate limit."""
-    TARGET_SECONDS_PER_REQUEST = 8.0  # (60 seconds / 30 requests)
-    start_time = state.get("loop_start_time", time.time())
-    time_elapsed = time.time() - start_time
-    sleep_duration = max(0, TARGET_SECONDS_PER_REQUEST - time_elapsed)
+    job_description_pages = []
+    job_board_pages = []
 
-    if sleep_duration > 0:
-        # print(f"  -> Throttling: sleeping for {sleep_duration:.2f} seconds.")
-        await asyncio.sleep(sleep_duration)
+    for i, (page_text, classification) in enumerate(results):
+        if classification == "JOB_DESCRIPTION" and page_text:
+            job_description_pages.append({"url": urls_to_process[i], "text": page_text})
+        elif classification == "JOB_BOARD":
+            job_board_pages.append(urls_to_process[i])
 
-    index = state.get("url_index", 0)
-    is_on_extracted_jb_urls = state.get("is_on_extracted_jb_urls", False)
-    if not is_on_extracted_jb_urls:
-        urls = state.get("urls_to_process", [])
-        if index + 1 >= len(urls):
-            # if at the end of the urls_to_process
-            # Reset the index and switch job lists
-            print("---> SWITCHING TO JB EXTRACTED URLS ---")
-            return {"url_index": 0, "is_on_extracted_jb_urls": True}
-        return {"url_index": index + 1}
-    # In the case that we reach the end of the extracted job urls 
-    # we should just increment and let the router take care of it
+    extracted_jobs = []
+    if job_description_pages:
+        print(f"\n--- EXTRACTING DETAILS FROM {len(job_description_pages)} JOB DESCRIPTIONS ---")
+        job_detail_tasks = [extract_job_details_node(page["text"], page["url"]) for page in job_description_pages]
+        extracted_jobs = await asyncio.gather(*job_detail_tasks)
+        extracted_jobs = [job for job in extracted_jobs if job] 
+
+    if job_board_pages:
+        print(f"\nINFO: Found {len(job_board_pages)} job boards, but skipping recursive extraction for now.")
+
     return {
-        "url_index": index + 1
+        "extracted_jobs": extracted_jobs,
+        "urls_to_process": [] 
     }
 
 class JobSearchService:
     def __init__(self):
         workflow = StateGraph(AgentState)
 
-        # Add all nodes to the graph
         workflow.add_node("craft_query", craft_query_node)
         workflow.add_node("find_urls", find_urls_node)
-        workflow.add_node("fetch_page_text", fetch_page_text_node)
-        workflow.add_node("classify_page", classify_page_node)
-        workflow.add_node("extract_job_details", extract_job_details_node)
-        workflow.add_node("extract_urls", extract_urls_node)
-        workflow.add_node("increment_index", increment_index_node)
+        workflow.add_node("process_urls_in_parallel", process_urls_in_parallel)
         workflow.add_node("process_and_match", process_and_match_node)
 
-        # Define the graph's execution flow
         workflow.set_entry_point("craft_query")
         workflow.add_edge("craft_query", "find_urls")
-
-        # After finding URLs, go directly to the decision router.
         workflow.add_conditional_edges(
             "find_urls",
-            loop_control_router,
-            {"continue_processing": "fetch_page_text", "finish_processing": "process_and_match"}
+            should_process_urls_router,
+            {"process_urls": "process_urls_in_parallel", "finish_processing": "process_and_match"}
         )
-        
-        # The processing flow for a single URL
-        workflow.add_edge("fetch_page_text", "classify_page")
-
-        # The "gatekeeper" router after classification
-        workflow.add_conditional_edges(
-            "classify_page",
-            should_extract_router,
-            {"extract_details": "extract_job_details", "extract_urls": "extract_urls", "skip_extraction": "increment_index"}
-        )
-
-        workflow.add_edge("extract_job_details", "increment_index")
-
-        # Add conditional router from extract urls to increment_index/filter_urls
-
-        workflow.add_edge("extract_urls", "increment_index")
-        
-        # After incrementing the index, loop back to the main decision router
-        workflow.add_conditional_edges(
-            "increment_index",
-            loop_control_router,
-            {"continue_processing": "fetch_page_text", "finish_processing": "process_and_match"}
-        )
-
-        # The final step after the loop is complete
+        workflow.add_edge("process_urls_in_parallel", "process_and_match")
         workflow.add_edge("process_and_match", END)
-
-        # Compile the graph
         self.app = workflow.compile()
     
     async def search_and_process_jobs(self, resume_text: str, search_prompt: str) -> List[Job]:
         print("\n🚀 --- STARTING AGENTIC JOB SEARCH --- 🚀")
 
-        async with PlaywrightManager() as page:
+        async with PlaywrightManager() as browser:
             initial_state = {
                 "resume_text": resume_text,
                 "search_prompt": search_prompt,
-                "page": page # Dependency Injection
+                "browser": browser,
+                "extracted_jobs": [],
             }
         
-            final_state = await self.app.ainvoke(initial_state, config={"recursion_limit": 10000})
-            
-            # Retrieve the list from the 'final_jobs' key, which is set by the last node in the graph.
+            final_state = await self.app.ainvoke(initial_state, config={"recursion_limit": 100})
             final_jobs = final_state.get('final_jobs', [])
 
         print("✅ --- AGENTIC JOB SEARCH COMPLETE --- ✅\n")
         if final_jobs:
-            final_jobs_as_dicts = [job.model_dump() for job in final_jobs]
-            # print(f"FINAL RESULTS:\n {json.dumps(final_jobs_as_dicts, indent=2)}")
+            print(f"--- Found {len(final_jobs)} Relevant Jobs! ---")
         else:
             print("No jobs were found or extracted successfully.")
         

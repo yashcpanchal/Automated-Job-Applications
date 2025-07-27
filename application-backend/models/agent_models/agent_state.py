@@ -17,24 +17,25 @@ class AgentState(TypedDict):
     # List of urls to process
     urls_to_process: List[str]
     # List of urls that are extacted from job boards
-    urls_extracted_job_boards: Annotated[List[str], operator.add]
+    # urls_extracted_job_boards: Annotated[List[str], operator.add]
     
     # Running list of extracted jobs
     extracted_jobs: Annotated[List[Job], operator.add]
 
-    loop_start_time: float
+    # loop_start_time: float
     
     # State for the processing loop
-    url_index: int
-    current_url: str
-    current_page_text: str
-    current_page_classification: str
+    # url_index: int
+    # current_url: str
+    # current_page_text: str
+    # current_page_classification: str
 
     # Boolean for if on extracted_jb_urls
-    is_on_extracted_jb_urls: bool
+    # is_on_extracted_jb_urls: bool
 
     # Playwright page
-    page: object
+    # page: object
     
+    browser: object
     # This key is set by the final node, but we define it here for completeness.
     final_jobs: List[Job]
