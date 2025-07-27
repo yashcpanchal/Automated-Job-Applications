@@ -63,25 +63,8 @@ async def craft_query_node(state: AgentState):
         ("system", """You are a world-class career assistant and an expert at crafting search engine queries for the Brave Search engine.
         Your goal is to generate 1 search query to help a user find relevant job postings.
 
-        **Strategy: Vague to Specific**
-        1. Start with broad, simple queries.
-        2. Create slightly more specific queries using keywords from the user's resume and prompt.
-        3. Use Brave Search operators to refine the search.
-
-        **Key Brave Search Operators to Use:**
-        - `""`: Use double quotes for exact phrases, like `"software engineer"`. This is very important.
-        - `-`: Use a minus sign to exclude terms. For example, `-internship` or `-entry-level` if the resume seems senior.
-        - `OR`: Use the OR operator (in uppercase) to search for alternatives, like `(Django OR FastAPI)`.
-
-        **Example of GOOD Queries:**
-        - "backend developer" remote
-        - "python developer" (FastAPI OR Django)
-        - "senior software engineer" cloud -"entry-level"
-
-        **Example of a BAD Query (Too Specific):**
-        - "remote senior software engineer with 5 years of python fastapi and sql experience"
-
-        Now, based on the user's resume and prompt below, generate the query."""),
+        Now, based on the user's resume and prompt below, generate the query. Keep it vague but relevant to the users' industry
+        a good example is 'software engineering internships'."""),
         ("user", """Here is my resume:
         <resume>
         {resume_text}
